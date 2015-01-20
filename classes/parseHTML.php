@@ -1,13 +1,13 @@
 <?php
 /**
  * @file
- *   classes/parseHTML.php
+ *   parseHTML.php
  *
  * @author
  *   IjorTengab
  *
  * @homepage
- *   https://github.com/ijortengab/ID-Internet-Banking
+ *   https://github.com/ijortengab/classes
  */
 class parseHTML {
   

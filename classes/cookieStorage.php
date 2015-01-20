@@ -1,13 +1,13 @@
 <?php
 /**
  * @file
- *   classes/cookieStorage.php
+ *   cookieStorage.php
  *
  * @author
  *   IjorTengab
  *
  * @homepage
- *   https://github.com/ijortengab/ID-Internet-Banking
+ *   https://github.com/ijortengab/classes
  */
 class cookieStorage extends parseCSV {
 

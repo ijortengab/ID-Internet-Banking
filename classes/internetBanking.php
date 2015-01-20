@@ -1,7 +1,7 @@
 <?php
 /**
  * @file
- *   classes/internetBanking.php
+ *   internetBanking.php
  *
  * @author
  *   IjorTengab

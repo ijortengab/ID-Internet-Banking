@@ -1,7 +1,7 @@
 <?php
 /**
  * @file
- *   classes/BCA.php
+ *   BCA.php
  *
  * @author
  *   IjorTengab

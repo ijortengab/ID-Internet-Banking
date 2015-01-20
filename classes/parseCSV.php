@@ -1,7 +1,7 @@
 <?php
 /**
  * @file
- *   classes/parseCSV.php
+ *   parseCSV.php
  *
  * @author
  *   parsecsv, Jim Myhrberg, William Knauss

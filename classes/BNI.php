@@ -1,7 +1,7 @@
 <?php
 /**
  * @file
- *   classes/BNI.php
+ *   BNI.php
  *
  * @author
  *   IjorTengab

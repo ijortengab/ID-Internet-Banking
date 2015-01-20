@@ -1,7 +1,7 @@
 <?php
 /**
  * @file
- *   classes/Mandiri.php
+ *   Mandiri.php
  *
  * @author
  *   IjorTengab

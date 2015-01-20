@@ -1,14 +1,13 @@
 <?php
 /**
  * @file
- *   classes/browser.php
+ *   browser.php
  *
  * @author
  *   IjorTengab
  *
  * @homepage
- *   https://github.com/ijortengab/ID-Internet-Banking
- *   https://github.com/ijortengab/browser
+ *   https://github.com/ijortengab/classes
  */
 class browser {
 

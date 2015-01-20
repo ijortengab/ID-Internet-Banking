@@ -1,7 +1,7 @@
 <?php
 /**
  * @file
- *   classes/stateStorage.php
+ *   stateStorage.php
  *
  * @author
  *   IjorTengab
