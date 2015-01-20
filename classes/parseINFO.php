@@ -20,7 +20,7 @@ class parseINFO {
 	// ubah dari string ke array
 	// sebaliknya jika input diberikan merupakan array atau object
 	// maka ubah menjadi string.
-	protected function __construct($input = NULL) {
+	function __construct($input = NULL) {
 		if (is_array($input) || is_object($input)) {
 			return $this->result = $this->encode($input);
 		}
@@ -185,4 +185,5 @@ class parseINFO {
 		}
 		return $value;
 	}
+
 }
