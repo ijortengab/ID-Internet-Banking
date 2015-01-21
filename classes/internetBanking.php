@@ -24,6 +24,8 @@ abstract class internetBanking {
   // Result information.
   public $balance;
   public $history;
+  
+  public $error = array();
 
   // var $options = array();
 
@@ -37,8 +39,6 @@ abstract class internetBanking {
         throw new Exception('Class handler tidak ditemukan.');
       }
       $handler = $this->reference()[$bank]['handler'];
-
-
       $this->bank = new $handler;
     }
     catch (Exception $e) {
@@ -72,8 +72,10 @@ abstract class internetBanking {
       if (empty($this->bank)) {
         throw new Exception('Object class belum didefinisikan.');
       }
-      //
-      return $this->bank->execute($this);
+      // Execute.
+      $this->bank->execute();
+      // Get info error, balance, and history.
+      $this->error = array_merge($this->error, $this->bank->error);
     }
     catch (Exception $e) {
       echo 'Caught exception: ',  $e->getMessage(), "\n";

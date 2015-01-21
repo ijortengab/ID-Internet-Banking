@@ -9,16 +9,18 @@
  * @homepage
  *   https://github.com/ijortengab/ID-Internet-Banking
  */
+
 require('classes/internetBanking.php');
-  require('classes/internetBankingID.php');
+require('classes/internetBankingID.php');
+require('classes/timer.php');
 require('classes/browser.php');
-  require('classes/BCA.php');
-  require('classes/BNI.php');
-  require('classes/Mandiri.php');
+require('classes/BCA.php');
+require('classes/BNI.php');
+require('classes/Mandiri.php');
 require('classes/parseCSV.php');
-  require('classes/cookieStorage.php');
+require('classes/cookieStorage.php');
 require('classes/parseINFO.php');
-  require('classes/stateStorage.php');
+require('classes/stateStorage.php');
 require('classes/parseHTML.php');
 
 $ibank = new internetBankingID('bni');
@@ -27,6 +29,11 @@ $ibank->password = 'WYSIWYG';
 $ibank->execute();
 
 echo $ibank->balance;
+
+// It's recomended to see error.log
+if (!empty($ibank->error)) {
+  print_r($ibank->error);  
+}
 
 
 // $ibank->set('roji', 'cinta')->set('aku', 'mengapa');
