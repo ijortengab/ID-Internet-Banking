@@ -1,8 +1,8 @@
 <?php
 
-class timer {  
+class timer {
   function __construct() {
-    $this->start = microtime(TRUE);    
+    $this->start = microtime(TRUE);
   }
   function read() {
     $stop = microtime(TRUE);

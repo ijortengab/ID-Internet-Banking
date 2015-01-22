@@ -51,6 +51,9 @@ class browser {
   // Name of cookie file
   public $cookie_filename = 'cookie.csv';
 
+  // Name of history file.
+  public $history_filename = 'access.log';
+
   // Info about error.log
   public $error = array();
 
@@ -65,9 +68,9 @@ class browser {
     // Set working directory with same place.
     $this->setCwd(__DIR__);
 
-    // Buat object Cookie Storage
-    // Buat object
-
+    // Prefered using curl.
+    $this->curl(TRUE);
+    $this->options('encoding', 'gzip, deflate');
   }
 
   public function setUrl($url) {
@@ -104,14 +107,57 @@ class browser {
     return $this->url;
   }
 
-  public function setCwd($dir) {
+  protected function mkdir($dir) {
     try {
-      if (!is_dir($dir)) {
-        throw new Exception('Directory is not exists: "' . $dir . '".');
+      if (file_exists($dir)) {
+        $something = 'something';
+        if (is_file($dir)) {
+          $something = 'file';
+        }
+        if (is_link($dir)) {
+          $something = 'link';
+        }
+        throw new Exception('Create directory cancelled, ' . $something . ' has same name and exists: "' . $dir . '".');
+      }
+      $mode = $this->getState('file_chmod_directory', 0775);
+      if (@mkdir($dir, $mode, TRUE) === FALSE) {
+        throw new Exception('Create directory failed: "' . $dir . '".');
+      }
+      return TRUE;
+    }
+    catch (Exception $e) {
+      $this->error[] = $e->getMessage();
+    }
+  }
+
+  // This functin should fire in construct or soon after call this object.
+  public function setCwd($dir, $autocreate = FALSE) {
+    try {
+      if (!is_dir($dir) && !$autocreate) {
+        throw new Exception('Set directory failed, directory not exists: "' . $dir . '".');
+      }
+      if (!is_dir($dir) && $autocreate && !$this->mkdir($dir)) {
+        throw new Exception('Set directory failed, trying to create but failed: "' . $dir . '".');
       }
       if (!is_writable($dir)) {
-        throw new Exception('Directory is not writable: "' . $dir . '".');
+        throw new Exception('Set directory failed, directory is not writable: "' . $dir . '".');
       }
+      // Sebelum set.
+      // Copy file-file yang berada di directory lama.
+      $old = $this->getCwd();
+      $new = $dir;
+      $files = array(
+        $this->state_filename,
+        $this->cookie_filename,
+        $this->history_filename,
+      );
+      foreach ($files as $file) {
+        if (file_exists($old . DIRECTORY_SEPARATOR . $file)) {
+          rename($old . DIRECTORY_SEPARATOR . $file, $new . DIRECTORY_SEPARATOR . $file);
+        }
+      }
+
+      // Directory sudah siap diset.
       $this->cwd = $dir;
     }
     catch (Exception $e) {
@@ -124,7 +170,7 @@ class browser {
   }
 
   // Build and create file for our state.
-  private function initState() {
+  protected function initState() {
     // Current working directory is required.
     try {
       if (!isset($this->cwd)) {
@@ -160,7 +206,7 @@ class browser {
   // If no argument passed, it means get all state.
   protected function getState($name = NULL, $default = NULL) {
     if (empty($this->state) && !$this->initState()) {
-      return;
+      return $default;
     }
     $result = $this->state->get($name, $default);
     // Merge error.log.
@@ -169,16 +215,20 @@ class browser {
   }
 
   // Similar with drupal's variable_del() function.
+  // If no argument passed, it means del all state.
   protected function delState($name = NULL) {
     if (empty($this->state) && !$this->initState()) {
       return;
     }
+    // todo, if name == NULL, maka destroy,
+    // tapi sebelumnya buat backup dulu agar tidak menyesal.
+
     $this->state->del($name, $default);
     // Merge error.log.
     $this->error = array_merge($this->error, $this->state->error);
   }
 
-  // cookie
+  // Build and create file for our cookie.
   protected function initCookie() {
     // Current working directory is required.
     try {
@@ -189,7 +239,7 @@ class browser {
       $create = FALSE;
       if (!file_exists($filename)) {
         $create = TRUE;
-      }      
+      }
       else {
         $size = filesize($filename);
         if (empty($size)) {
@@ -215,11 +265,12 @@ class browser {
       $this->error[] = $e->getMessage();
     }
   }
-  // cookie
+
+  // Save cookie from header response to file csv.
   protected function setCookie() {
     if (empty($this->cookie) && !$this->initCookie()) {
       return;
-    }    
+    }
     if (isset($this->result->headers['set-cookie'])) {
       // Fungsi drupal_http_request() menggabungkan seluruh set-cookie dengan glue comma
       // (lihat pada comment "Parse the response headers.").
@@ -271,10 +322,28 @@ class browser {
         // Save cookie.
         $this->cookie->set($data);
       }
-    }    
+    }
   }
-  
-  
+
+  // Retrieve cookie from file csv than set to header request.
+  protected function getCookie() {
+  }
+
+  protected function history() {
+    $filename = $this->getCwd() . DIRECTORY_SEPARATOR . $this->history_filename;
+    $content = $this->result->request;
+    $content = preg_replace("/\r\n|\n|\r/", "\t", $content);
+    $content .= PHP_EOL;
+    try {
+      if (@file_put_contents($filename, $content, FILE_APPEND) === FALSE) {
+        throw new Exception('Failed to write content to: "' . $this->filename . '".');
+      }
+    }
+    catch (Exception $e) {
+      $this->error[] = $e->getMessage();
+    }
+  }
+
   // Modify (add, edit, delete) of simple array in one function.
   private function propertyArray($property, $args) {
     if (!property_exists(__CLASS__, $property)) {
@@ -329,12 +398,13 @@ class browser {
   }
 
   // CRUD of property $headers.
-  function headers() {
+  public function headers() {
     $args = func_get_args();
     return $this->propertyArray('headers', $args);
   }
 
   // Switch if you want use curl as driver to request HTTP.
+  // Curl support to compressed response.
   public function curl($switch = TRUE) {
     if ($switch && function_exists('curl_init')) {
       return $this->curl = TRUE;
@@ -346,7 +416,6 @@ class browser {
 
   // Main function.
   public function browse() {
-    echo 'browse()';
     // URL is required.
     $url = $this->getUrl();
     if (empty($url)) {
@@ -358,25 +427,37 @@ class browser {
       $this->error[] = 'Current Working Directory not set yet, request canceled.';
       return;
     }
+    // Retrieve cookie.
+    if ($this->getState('cookie_retrieve', TRUE)) {
+      $this->getCookie();
+    }
 
     // Browse.
     $this->result = $this->_browse();
-    
+
     // Save cookie.
     if ($this->getState('cookie_save', TRUE)) {
       $this->setCookie();
     }
-    
-    // echo "\r\n\r\nxx\r\n\r\n";
-    // var_export($this->result);
-    // echo "\r\n\r\nyy\r\n\r\n";
-    
 
+    // Save history.
+    if ($this->getState('history_save', TRUE)) {
+      $this->history();
+    }
+    // Save info error.
+    if (isset($this->result->error)) {
+      $this->error[] = $this->result->error;
+    }
+
+    // todo, handle follow location.
+
+
+    // We must set return so user can playing with parseHTTP object.
+    return $this->result;
   }
 
   protected function _browse() {
-    echo '_browse()';
-    $method = $this->curl ? 'curl_request' : 'drupal_http_request';    
+    $method = $this->curl ? 'curl_request' : 'drupal_http_request';
     switch ($method) {
       case 'curl_request':
         return $this->{$method}();
@@ -387,16 +468,19 @@ class browser {
     }
   }
 
-  // Modified of function drupal_http_request in Drupal 7.
+  // // Request HTTP modified of function drupal_http_request in Drupal 7.
+  // Some part is in this method, another part is in HTTP object.
   protected function drupal_http_request() {
     if (!isset($this->timer)) {
       $this->timer = new timer;
     }
-    $result = new stdClass();
+    $result = new parseHTTP;
     $url = $this->getUrl();
     $uri = $this->parse_url;
     $options = $this->options();
     $headers = $this->headers();
+
+    // Default options.
     $options += array(
       'headers' => $headers,
       'method' => 'GET',
@@ -411,6 +495,8 @@ class browser {
     );
     // stream_socket_client() requires timeout to be a float.
     $options['timeout'] = (float) $options['timeout'];
+
+    // Support proxy.
     $proxy_server = $this->getState('proxy_server', '');
     $proxy_exceptions = $this->getState('proxy_exceptions', array('localhost', '127.0.0.1'));
     $is_host_not_proxy_exceptions = !in_array(strtolower($uri['host']), $proxy_exceptions, TRUE);
@@ -437,6 +523,7 @@ class browser {
         $options['headers']['User-Agent'] = $proxy_user_agent;
       }
     }
+
     switch ($uri['scheme']) {
       case 'proxy':
         // Make the socket connection to a proxy server.
@@ -484,7 +571,7 @@ class browser {
       // server's ability to make outgoing HTTP requests the next time that
       // requirements checking is performed.
       // See system_requirements().
-      $this->setState('drupal_http_request_fails', TRUE);
+      // $this->setState('drupal_http_request_fails', TRUE);
       return $result;
     }
     // Construct the path to act on.
@@ -542,84 +629,92 @@ class browser {
       $result->error = 'request timed out';
       return $result;
     }
-    // Parse response headers from the response body.
-    // Be tolerant of malformed HTTP responses that separate header and body with
-    // \n\n or \r\r instead of \r\n\r\n.
-    list($response, $result->data) = preg_split("/\r\n\r\n|\n\n|\r\r/", $response, 2);
-    $response = preg_split("/\r\n|\n|\r/", $response);
-    // Parse the response status line.
-    list($protocol, $code, $status_message) = explode(' ', trim(array_shift($response)), 3);
-    $result->protocol = $protocol;
-    $result->status_message = $status_message;
-
-    $result->headers = array();
-    // Parse the response headers.
-    while ($line = trim(array_shift($response))) {
-      list($name, $value) = explode(':', $line, 2);
-      $name = strtolower($name);
-      if (isset($result->headers[$name]) && $name == 'set-cookie') {
-        // RFC 2109: the Set-Cookie response header comprises the token Set-
-        // Cookie:, followed by a comma-separated list of one or more cookies.
-        $result->headers[$name] .= ',' . trim($value);
-      }
-      else {
-        $result->headers[$name] = trim($value);
-      }
-    }
-    $responses = array(
-      100 => 'Continue',
-      101 => 'Switching Protocols',
-      200 => 'OK',
-      201 => 'Created',
-      202 => 'Accepted',
-      203 => 'Non-Authoritative Information',
-      204 => 'No Content',
-      205 => 'Reset Content',
-      206 => 'Partial Content',
-      300 => 'Multiple Choices',
-      301 => 'Moved Permanently',
-      302 => 'Found',
-      303 => 'See Other',
-      304 => 'Not Modified',
-      305 => 'Use Proxy',
-      307 => 'Temporary Redirect',
-      400 => 'Bad Request',
-      401 => 'Unauthorized',
-      402 => 'Payment Required',
-      403 => 'Forbidden',
-      404 => 'Not Found',
-      405 => 'Method Not Allowed',
-      406 => 'Not Acceptable',
-      407 => 'Proxy Authentication Required',
-      408 => 'Request Time-out',
-      409 => 'Conflict',
-      410 => 'Gone',
-      411 => 'Length Required',
-      412 => 'Precondition Failed',
-      413 => 'Request Entity Too Large',
-      414 => 'Request-URI Too Large',
-      415 => 'Unsupported Media Type',
-      416 => 'Requested range not satisfiable',
-      417 => 'Expectation Failed',
-      500 => 'Internal Server Error',
-      501 => 'Not Implemented',
-      502 => 'Bad Gateway',
-      503 => 'Service Unavailable',
-      504 => 'Gateway Time-out',
-      505 => 'HTTP Version not supported',
-    );
-    // RFC 2616 states that all unknown HTTP codes must be treated the same as the
-    // base code in their class.
-    if (!isset($responses[$code])) {
-      $code = floor($code / 100) * 100;
-    }
-    $result->code = $code;
+    // Drupal code stop here, next we passing to parseHTTP::parse.
+    $result->parse($response);
     return $result;
   }
 
-  //
+  // Request HTTP using curl library.
   protected function curl_request() {
-    echo 'curl_request()';
+    $url = $this->getUrl();
+    $uri = $this->parse_url;
+    $options = $this->options();
+    $headers = $this->headers();
+    // Default options.
+    $options += array(
+      'timeout' => 30.0,
+    );
+    $options['timeout'] = (float) $options['timeout'];
+
+    // Start curl.
+    $ch = curl_init();
+    curl_setopt($ch, CURLOPT_RETURNTRANSFER, TRUE);
+    curl_setopt($ch, CURLOPT_HEADER, TRUE);
+
+    // Support proxy.
+    $proxy_server = $this->getState('proxy_server', '');
+    $proxy_exceptions = $this->getState('proxy_exceptions', array('localhost', '127.0.0.1'));
+    $is_host_not_proxy_exceptions = !in_array(strtolower($uri['host']), $proxy_exceptions, TRUE);
+    if ($proxy_server && $is_host_not_proxy_exceptions) {
+      curl_setopt($ch, CURLOPT_PROXY, $proxy_server);
+      $proxy_port = $this->getState('proxy_port', 8080);
+      empty($proxy_port) or curl_setopt($ch, CURLOPT_PROXYPORT, $proxy_port);
+      if ($proxy_username = $this->getState('proxy_username', '')) {
+        $proxy_password = $this->getState('proxy_password', '');
+        $auth = $proxy_username . (!empty($proxy_password) ? ":" . $proxy_password : '');
+        curl_setopt($ch, CURLOPT_PROXYUSERPWD, $auth);
+      }
+      // Add a new info of headers.
+      $headers['Expect'] = ''; // http://stackoverflow.com/questions/6244578/curl-post-file-behind-a-proxy-returns-error
+    }
+
+    // CURL Options.
+    foreach ($options as $option => $value) {
+      switch ($option) {
+        case 'timeout':
+          curl_setopt($ch, CURLOPT_TIMEOUT, $value);
+          break;
+
+        case 'referer':
+          curl_setopt($ch, CURLOPT_REFERER, $value);
+          break;
+
+        case 'encoding':
+          curl_setopt($ch, CURLOPT_ENCODING, $value);
+          break;
+      }
+    }
+    // HTTPS.
+    if ($uri['scheme'] == 'https') {
+      curl_setopt($ch, CURLOPT_SSL_VERIFYHOST, 0);
+      curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, 0);
+    }
+    // Set header.
+    $_ = array();
+    foreach ($headers as $header => $value) {
+      $_[] = $header . ': ' . $value;
+    }
+    curl_setopt($ch, CURLOPT_HTTPHEADER, $_);
+    // Set URL.
+    curl_setopt($ch, CURLOPT_URL, $url);
+
+    curl_setopt($ch, CURLINFO_HEADER_OUT, true);
+    $response = curl_exec($ch);
+    $info = curl_getinfo($ch);
+    $error = curl_errno($ch);
+    curl_close($ch);
+    $result = new parseHTTP;
+    // $info is passing by curl.
+    if (isset($info['request_header'])) {
+      $result->request = $info['request_header'];
+    }
+    if ($error == 28) {
+      $result->code = -1;
+      $result->error = 'request timed out';
+      return $result;
+    }
+    $result->parse($response);
+    return $result;
   }
 
   // Reference of field of cookie.

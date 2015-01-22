@@ -10,5 +10,5 @@
  *   https://github.com/ijortengab/classes
  */
 class parseHTML {
-  
+
 }

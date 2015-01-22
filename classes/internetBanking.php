@@ -24,7 +24,7 @@ abstract class internetBanking {
   // Result information.
   public $balance;
   public $history;
-  
+
   public $error = array();
 
   // var $options = array();

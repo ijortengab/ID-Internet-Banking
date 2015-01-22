@@ -21,6 +21,9 @@ class stateStorage extends parseINFO {
   // Read.
   protected function read() {
     try {
+      if (!file_exists($this->filename)) {
+        return;
+      }
       if (($content = @file_get_contents($this->filename)) === FALSE) {
         throw new Exception('Failed to get content from: "' . $this->filename . '".');
       }

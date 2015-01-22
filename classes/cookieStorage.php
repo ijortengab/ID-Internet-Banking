@@ -17,11 +17,11 @@ class cookieStorage extends parseCSV {
   // If set TRUE, it will replace old value with new one.
   // Otherwise new data will appended.
   var $auto_update = FALSE;
-  
+
   function __construct() {
     // Execute parent.
     $args = func_get_args();
-    call_user_func_array('parent::__construct', $args);        
+    call_user_func_array('parent::__construct', $args);
   }
 
   function get($parse_url) {
