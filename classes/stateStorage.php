@@ -49,13 +49,23 @@ class stateStorage extends parseINFO {
   //
   public function set($name, $value) {
     try {
-      if ((is_string($name) || is_numeric($name)) === FALSE) {
-        throw new Exception('State name must string or numeric.');
+      // It means merge.
+      if (is_array($name) && is_null($value)) {
+        $info = $this->read();        
+        if (isset($info)) {
+          $info = array_merge($info, $name);
+          $this->save($info);  
+        }
       }
-      $info = $this->read();
-      if (isset($info)) {
-        $info[$name] = $value;
-        $this->save($info);
+      elseif (is_string($name) || is_numeric($name)) {
+        $info = $this->read();
+        if (isset($info)) {
+          $info[$name] = $value;
+          $this->save($info);
+        }
+      }
+      else {
+        throw new Exception('Unknown format to save state.');
       }
     }
     catch (Exception $e) {

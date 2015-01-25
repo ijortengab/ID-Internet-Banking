@@ -30,10 +30,29 @@ class browser {
   private $curl = FALSE;
 
   // Options that needed when you browsing.
+  /*
+  options used by curl
+  encoding (default: gzip, deflate)
+  timeout (default: 30)
+  referer
+
+
+  options used by stream
+  'method' => 'GET',
+  'data' => NULL,
+  'max_redirects' => 3,
+  'timeout' => 30.0,
+  'context' => NULL,
+
+
+   */
   protected $options = array();
 
   // Header that needed when you request HTTP.
   protected $headers = array();
+
+  // Post
+  protected $post = array();
 
   // Object result after browsing, contains info at least:
   // header response and body response.
@@ -54,11 +73,22 @@ class browser {
   // Name of history file.
   public $history_filename = 'access.log';
 
+  // Name of cache file.
+  public $cache_filename = 'cache.html';
+
+  // The real of cache file_name that has storage,
+  // because we use autoincreament suffix in filename
+  // to void overwriting file cache.
+  var $cache;
+
   // Info about error.log
   public $error = array();
 
   // Info about access.log
   public $access = array();
+
+  // storage to count time browsing.
+  var $timer;
 
   function __construct($url = NULL) {
     // Set url.
@@ -97,6 +127,8 @@ class browser {
         $this->original_url = $url;
       }
       $this->parse_url = $parse_url;
+
+      return $this;
     }
     catch (Exception $e) {
       $this->error[] = $e->getMessage();
@@ -170,13 +202,16 @@ class browser {
   }
 
   // Build and create file for our state.
-  protected function initState() {
+  protected function initState($autocreate = FALSE) {
     // Current working directory is required.
     try {
+      $filename = $this->cwd . DIRECTORY_SEPARATOR . $this->state_filename;
+      if (!file_exists($filename) && !$autocreate) {
+        return FALSE;
+      }
       if (!isset($this->cwd)) {
         throw new Exception('Current Working Directory not set yet, build State canceled.');
       }
-      $filename = $this->cwd . DIRECTORY_SEPARATOR . $this->state_filename;
       if (!file_exists($filename)) {
         @file_put_contents($filename, '');
       }
@@ -194,12 +229,14 @@ class browser {
 
   // Similar with drupal's variable_set() function.
   protected function setState($name, $value = NULL) {
-    if (empty($this->state) && !$this->initState()) {
+    if (empty($this->state) && !$this->initState(TRUE)) {
       return;
     }
     $this->state->set($name, $value);
     // Merge error.log.
     $this->error = array_merge($this->error, $this->state->error);
+    // Return object to make a thread.
+    return $this;
   }
 
   // Similar with drupal's variable_get() function.
@@ -223,19 +260,24 @@ class browser {
     // todo, if name == NULL, maka destroy,
     // tapi sebelumnya buat backup dulu agar tidak menyesal.
 
-    $this->state->del($name, $default);
+    $this->state->del($name);
     // Merge error.log.
     $this->error = array_merge($this->error, $this->state->error);
+    // Return object to make a thread.
+    return $this;
   }
 
   // Build and create file for our cookie.
-  protected function initCookie() {
+  protected function initCookie($autocreate = FALSE) {
     // Current working directory is required.
     try {
+      $filename = $this->cwd . DIRECTORY_SEPARATOR . $this->cookie_filename;
+      if (!file_exists($filename) && !$autocreate) {
+        return FALSE;
+      }
       if (!isset($this->cwd)) {
         throw new Exception('Current Working Directory not set yet, build Cookie canceled.');
       }
-      $filename = $this->cwd . DIRECTORY_SEPARATOR . $this->cookie_filename;
       $create = FALSE;
       if (!file_exists($filename)) {
         $create = TRUE;
@@ -258,7 +300,11 @@ class browser {
         throw new Exception('Failed to create cookie file, build Cookie canceled: "' . $filename . '".');
       }
       // Build object.
-      $this->cookie = new cookieStorage($filename);
+      // Jangan masukkan $filename sebagai argument saat calling cookieStorage,
+      // agar tidak dilakukan parsing. Parsing hanya dilakukan saat melakukan
+      // method get.
+      $this->cookie = new cookieStorage;
+      $this->cookie->file = $filename;
       return TRUE;
     }
     catch (Exception $e) {
@@ -268,7 +314,7 @@ class browser {
 
   // Save cookie from header response to file csv.
   protected function setCookie() {
-    if (empty($this->cookie) && !$this->initCookie()) {
+    if (empty($this->cookie) && !$this->initCookie(TRUE)) {
       return;
     }
     if (isset($this->result->headers['set-cookie'])) {
@@ -327,12 +373,39 @@ class browser {
 
   // Retrieve cookie from file csv than set to header request.
   protected function getCookie() {
+    if (empty($this->cookie) && !$this->initCookie()) {
+      return;
+    }
+    $cookies = $this->cookie->get($this->parse_url);
+    if (!empty($cookies)) {
+      $old = $this->headers('Cookie');
+      isset($old) or $old = '';
+      foreach($cookies as $cookie) {
+        if (!empty($old)) {
+          $old .= '; ';
+        }
+        $old .= $cookie['name'] . '=' . $cookie['value'];
+      }
+      $this->headers('Cookie', $old);
+    }
   }
 
   protected function history() {
     $filename = $this->getCwd() . DIRECTORY_SEPARATOR . $this->history_filename;
-    $content = $this->result->request;
-    $content = preg_replace("/\r\n|\n|\r/", "\t", $content);
+    $request = $this->result->request;
+    $response = $this->result->headers_raw;
+    $content = '';
+    $content .= 'REQUEST:' . "\t";
+    $content .= preg_replace("/\r\n|\n|\r/", "\t", $request);
+    $content .= PHP_EOL;
+    $content .= 'RESPONSE:' . "\t";
+    $content .= implode("\t", $response);
+    $content .= PHP_EOL;
+    if ($this->options('cache_save')) {
+      $content .= 'CACHE:' . "\t";
+      $content .= $this->cache;
+      $content .= PHP_EOL;
+    }
     $content .= PHP_EOL;
     try {
       if (@file_put_contents($filename, $content, FILE_APPEND) === FALSE) {
@@ -342,6 +415,66 @@ class browser {
     catch (Exception $e) {
       $this->error[] = $e->getMessage();
     }
+  }
+
+  protected function cache() {
+    if (empty($this->result->data)) {
+      return;
+    }
+    $basename = $this->cache_filename;
+    $directory = $this->getCwd();
+    $filename = $this->filename_uniquify($basename, $directory);
+    $content = $this->result->data;
+    try {
+      if (@file_put_contents($filename, $content) === FALSE) {
+        throw new Exception('Failed to write content to: "' . $this->filename . '".');
+      }
+      // Set a new name.
+      $this->cache = $filename;
+    }
+    catch (Exception $e) {
+      $this->error[] = $e->getMessage();
+    }
+  }
+  // Source from Drupal 7's function file_create_filename().
+  private function filename_uniquify($basename, $directory) {
+    // Strip control characters (ASCII value < 32). Though these are allowed in
+    // some filesystems, not many applications handle them well.
+    $basename = preg_replace('/[\x00-\x1F]/u', '_', $basename);
+    if (substr(PHP_OS, 0, 3) == 'WIN') {
+      // These characters are not allowed in Windows filenames
+      $basename = str_replace(array(':', '*', '?', '"', '<', '>', '|'), '_', $basename);
+    }
+
+    // A URI or path may already have a trailing slash or look like "public://".
+    if (substr($directory, -1) == DIRECTORY_SEPARATOR) {
+      $separator = '';
+    }
+    else {
+      $separator = DIRECTORY_SEPARATOR;
+    }
+
+    $destination = $directory . $separator . $basename;
+
+    if (file_exists($destination)) {
+      // Destination file already exists, generate an alternative.
+      $pos = strrpos($basename, '.');
+      if ($pos !== FALSE) {
+        $name = substr($basename, 0, $pos);
+        $ext = substr($basename, $pos);
+      }
+      else {
+        $name = $basename;
+        $ext = '';
+      }
+
+      $counter = 0;
+      do {
+        $destination = $directory . $separator . $name . '_' . $counter++ . $ext;
+      } while (file_exists($destination));
+    }
+
+    return $destination;
   }
 
   // Modify (add, edit, delete) of simple array in one function.
@@ -359,6 +492,10 @@ class browser {
         // If NULL, it means reset.
         if (is_null($variable)) {
           $this->{$property} = array();
+        }
+        // If Array, it meanse replace all value with that array.
+        elseif (is_array($variable)) {
+          $this->{$property} = $variable;
         }
         // Otherwise, it means get one info {$property} by key.
         elseif (isset($this->{$property}[$variable])) {
@@ -383,6 +520,8 @@ class browser {
           else {
             $this->{$property}[$key] = $value;
           }
+          // Kembalikan lagi object, agar bisa set banyak.
+          return $this;
         }
         catch (Exception $e) {
           $this->error[] = $e->getMessage();
@@ -403,19 +542,29 @@ class browser {
     return $this->propertyArray('headers', $args);
   }
 
+  // CRUD of property $headers.
+  public function post() {
+    $args = func_get_args();
+    return $this->propertyArray('post', $args);
+  }
+
   // Switch if you want use curl as driver to request HTTP.
   // Curl support to compressed response.
   public function curl($switch = TRUE) {
     if ($switch && function_exists('curl_init')) {
-      return $this->curl = TRUE;
+      $this->curl = TRUE;
     }
     else {
-      return $this->curl = FALSE;
+      $this->curl = FALSE;
     }
+    return $this;
   }
 
   // Main function.
   public function browse() {
+    if (!isset($this->timer)) {
+      $this->timer = new timer;
+    }
     // URL is required.
     $url = $this->getUrl();
     if (empty($url)) {
@@ -427,8 +576,11 @@ class browser {
       $this->error[] = 'Current Working Directory not set yet, request canceled.';
       return;
     }
+    // Use default option.
+    $this->options($this->options() + $this->_default_options());
+
     // Retrieve cookie.
-    if ($this->getState('cookie_retrieve', TRUE)) {
+    if ($this->options('cookie_retrieve')) {
       $this->getCookie();
     }
 
@@ -436,21 +588,59 @@ class browser {
     $this->result = $this->_browse();
 
     // Save cookie.
-    if ($this->getState('cookie_save', TRUE)) {
+    if ($this->options('cookie_save')) {
       $this->setCookie();
     }
 
+    // Save cache.
+    if ($this->options('cache_save')) {
+      $this->cache();
+    }
+
     // Save history.
-    if ($this->getState('history_save', TRUE)) {
+    if ($this->options('history_save')) {
       $this->history();
     }
+
     // Save info error.
     if (isset($this->result->error)) {
       $this->error[] = $this->result->error;
     }
 
-    // todo, handle follow location.
-
+    // Follow location.
+    if ($this->options('follow_location')) {
+      switch ($this->result->code) {
+        case 301: // Moved permanently
+        case 302: // Moved temporarily
+        case 307: // Moved temporarily
+        $location = $this->result->headers['location'];
+        // Jika location baru hanya path, maka ubah menjadi full url.
+        if (preg_match('/^\//',$location)) {
+          $parse_url = $this->parse_url;
+          $location = $parse_url['scheme'] . '://' . $parse_url['host'] . $location;
+        }
+        // Get all options.
+        $options = $this->options();
+        $options['timeout'] -= $this->timer->read() / 1000;
+        if ($options['timeout'] <= 0) {
+          $this->result->code = -1;
+          $this->result->error = 'request timed out';
+        }
+        elseif ($options['max_redirects']) {
+          $options['max_redirects']--;
+          // We have changed and must renew options.
+          $this->options($options);
+          // We must clear cookie that set in header.
+          $this->headers('Cookie', NULL);
+          // Empty cache filename.
+          $this->cache = NULL;
+          // And so, we must replace an new URL.
+          $this->setUrl($location);
+          // Browse again.
+          return $this->browse();
+        }
+      }
+    }
 
     // We must set return so user can playing with parseHTTP object.
     return $this->result;
@@ -468,33 +658,31 @@ class browser {
     }
   }
 
-  // // Request HTTP modified of function drupal_http_request in Drupal 7.
+  // Request HTTP modified of function drupal_http_request in Drupal 7.
   // Some part is in this method, another part is in HTTP object.
   protected function drupal_http_request() {
-    if (!isset($this->timer)) {
-      $this->timer = new timer;
-    }
     $result = new parseHTTP;
     $url = $this->getUrl();
     $uri = $this->parse_url;
     $options = $this->options();
     $headers = $this->headers();
-
-    // Default options.
-    $options += array(
-      'headers' => $headers,
-      'method' => 'GET',
-      'data' => NULL,
-      'max_redirects' => 3,
-      'timeout' => 30.0,
-      'context' => NULL,
-    );
+    $post = $this->post();    
+    
     // Merge the default headers.
-    $options['headers'] += array(
+    $headers += array(
       'User-Agent' => 'Drupal (+http://drupal.org/)',
     );
     // stream_socket_client() requires timeout to be a float.
     $options['timeout'] = (float) $options['timeout'];
+    
+    // Set post.
+    if (!empty($post)) {      
+      // $headers['Content-Type'] = 'multipart/form-data';
+      $headers['Content-Type'] = 'application/x-www-form-urlencoded';
+      $options['method'] = 'POST';
+      // $options['data'] = http_build_query($post);
+      $options['data'] = $this->drupal_http_build_query($post);
+    }
 
     // Support proxy.
     $proxy_server = $this->getState('proxy_server', '');
@@ -510,17 +698,17 @@ class browser {
       // Add in username and password to Proxy-Authorization header if needed.
       if ($proxy_username = $this->getState('proxy_username', '')) {
         $proxy_password = $this->getState('proxy_password', '');
-        $options['headers']['Proxy-Authorization'] = 'Basic ' . base64_encode($proxy_username . (!empty($proxy_password) ? ":" . $proxy_password : ''));
+        $headers['Proxy-Authorization'] = 'Basic ' . base64_encode($proxy_username . (!empty($proxy_password) ? ":" . $proxy_password : ''));
       }
       // Some proxies reject requests with any User-Agent headers, while others
       // require a specific one.
       $proxy_user_agent = $this->getState('proxy_user_agent', '');
       // The default value matches neither condition.
       if ($proxy_user_agent === NULL) {
-        unset($options['headers']['User-Agent']);
+        unset($headers['User-Agent']);
       }
       elseif ($proxy_user_agent) {
-        $options['headers']['User-Agent'] = $proxy_user_agent;
+        $headers['User-Agent'] = $proxy_user_agent;
       }
     }
 
@@ -529,8 +717,8 @@ class browser {
         // Make the socket connection to a proxy server.
         $socket = 'tcp://' . $proxy_server . ':' . $this->getState('proxy_port', 8080);
         // The Host header still needs to match the real request.
-        $options['headers']['Host'] = $uri['host'];
-        $options['headers']['Host'] .= isset($uri['port']) && $uri['port'] != 80 ? ':' . $uri['port'] : '';
+        $headers['Host'] = $uri['host'];
+        $headers['Host'] .= isset($uri['port']) && $uri['port'] != 80 ? ':' . $uri['port'] : '';
         break;
       case 'http':
       case 'feed':
@@ -539,13 +727,13 @@ class browser {
         // RFC 2616: "non-standard ports MUST, default ports MAY be included".
         // We don't add the standard port to prevent from breaking rewrite rules
         // checking the host that do not take into account the port number.
-        $options['headers']['Host'] = $uri['host'] . ($port != 80 ? ':' . $port : '');
+        $headers['Host'] = $uri['host'] . ($port != 80 ? ':' . $port : '');
         break;
       case 'https':
         // Note: Only works when PHP is compiled with OpenSSL support.
         $port = isset($uri['port']) ? $uri['port'] : 443;
         $socket = 'ssl://' . $uri['host'] . ':' . $port;
-        $options['headers']['Host'] = $uri['host'] . ($port != 443 ? ':' . $port : '');
+        $headers['Host'] = $uri['host'] . ($port != 443 ? ':' . $port : '');
         break;
       default:
         $result->error = 'invalid schema ' . $uri['scheme'];
@@ -585,15 +773,15 @@ class browser {
     // POST/PUT requests.
     $content_length = strlen($options['data']);
     if ($content_length > 0 || $options['method'] == 'POST' || $options['method'] == 'PUT') {
-      $options['headers']['Content-Length'] = $content_length;
+      $headers['Content-Length'] = $content_length;
     }
     // If the server URL has a user then attempt to use basic authentication.
     if (isset($uri['user'])) {
-      $options['headers']['Authorization'] = 'Basic ' . base64_encode($uri['user'] . (isset($uri['pass']) ? ':' . $uri['pass'] : ':'));
+      $headers['Authorization'] = 'Basic ' . base64_encode($uri['user'] . (isset($uri['pass']) ? ':' . $uri['pass'] : ':'));
     }
     //
     $request = $options['method'] . ' ' . $path . " HTTP/1.0\r\n";
-    foreach ($options['headers'] as $name => $value) {
+    foreach ($headers as $name => $value) {
       $request .= $name . ': ' . trim($value) . "\r\n";
     }
     $request .= "\r\n" . $options['data'];
@@ -629,28 +817,62 @@ class browser {
       $result->error = 'request timed out';
       return $result;
     }
+    echo "\r\n-----------------\r\n";
+    print_r($response);
+    echo "\r\n-----------------\r\n";
     // Drupal code stop here, next we passing to parseHTTP::parse.
     $result->parse($response);
     return $result;
   }
+  
+  protected function drupal_http_build_query(array $query, $parent = '') {
+    $params = array();
+
+    foreach ($query as $key => $value) {
+      $key = ($parent ? $parent . '[' . rawurlencode($key) . ']' : rawurlencode($key));
+
+      // Recurse into children.
+      if (is_array($value)) {
+        $params[] = drupal_http_build_query($value, $key);
+      }
+      // If a query parameter value is NULL, only append its key.
+      elseif (!isset($value)) {
+        $params[] = $key;
+      }
+      else {
+        // For better readability of paths in query strings, we decode slashes.
+        $params[] = $key . '=' . str_replace('%2F', '/', rawurlencode($value));
+      }
+    }
+
+    return implode('&', $params);
+  }
 
   // Request HTTP using curl library.
+  // Curl set to not following redirect (location header response)
+  // because we must handle set-cookie and save history.
+  // Redirect is handle outside curl.
   protected function curl_request() {
     $url = $this->getUrl();
     $uri = $this->parse_url;
     $options = $this->options();
     $headers = $this->headers();
-    // Default options.
-    $options += array(
-      'timeout' => 30.0,
-    );
-    $options['timeout'] = (float) $options['timeout'];
+    $post = $this->post();    
 
     // Start curl.
     $ch = curl_init();
     curl_setopt($ch, CURLOPT_RETURNTRANSFER, TRUE);
     curl_setopt($ch, CURLOPT_HEADER, TRUE);
-
+    
+    // Set post.
+    if (!empty($post)) {
+      // Add a new info of headers.
+      $headers['Content-Type'] = 'multipart/form-data';
+      // $headers['Content-Type'] = 'application/x-www-form-urlencoded';
+      curl_setopt($ch, CURLOPT_POST, 1);
+      curl_setopt($ch, CURLOPT_POSTFIELDS, $post);
+    }
+    
     // Support proxy.
     $proxy_server = $this->getState('proxy_server', '');
     $proxy_exceptions = $this->getState('proxy_exceptions', array('localhost', '127.0.0.1'));
@@ -689,6 +911,7 @@ class browser {
       curl_setopt($ch, CURLOPT_SSL_VERIFYHOST, 0);
       curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, 0);
     }
+
     // Set header.
     $_ = array();
     foreach ($headers as $header => $value) {
@@ -698,9 +921,17 @@ class browser {
     // Set URL.
     curl_setopt($ch, CURLOPT_URL, $url);
 
-    curl_setopt($ch, CURLINFO_HEADER_OUT, true);
+    curl_setopt($ch, CURLINFO_HEADER_OUT, TRUE);
     $response = curl_exec($ch);
     $info = curl_getinfo($ch);
+    echo "\r\n-----------------\r\n";
+    print_r($response);
+    print_r($info);
+    $result_header = substr($response, 0, $info['header_size']);
+    $result_body = substr($response, $info['header_size']);
+    var_dump($result_header);
+    var_dump($result_body);
+    echo "\r\n-----------------\r\n";    
     $error = curl_errno($ch);
     curl_close($ch);
     $result = new parseHTTP;
@@ -708,12 +939,25 @@ class browser {
     if (isset($info['request_header'])) {
       $result->request = $info['request_header'];
     }
-    if ($error == 28) {
-      $result->code = -1;
-      $result->error = 'request timed out';
-      return $result;
+    if ($error === 0) {
+      $result->parse($response);
     }
-    $result->parse($response);
+    else {
+      $result->code = -1;
+      switch ($error) {
+        case 6:
+          $result->error = 'cannot resolve host';
+          break;
+
+        case 28:
+          $result->error = 'request timed out';
+          break;
+
+        default:
+          $result->error = 'error occured';
+          break;
+      }
+    }
     return $result;
   }
 
@@ -728,6 +972,22 @@ class browser {
       'httponly',
       'secure',
       'created',
+    );
+  }
+
+  // Reference of default options.
+  private function _default_options() {
+    return array(
+      'method' => 'GET',
+      'data' => NULL,
+      'max_redirects' => 3,
+      'timeout' => 30.0,
+      'context' => NULL,
+      'cookie_retrieve' => FALSE,
+      'cookie_save' => FALSE,
+      'cache_save' => FALSE,
+      'history_save' => FALSE,
+      'follow_location' => FALSE,
     );
   }
 }

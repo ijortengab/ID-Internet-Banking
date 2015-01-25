@@ -39,6 +39,7 @@ class parseHTTP {
     $this->status_message = $status_message;
 
     $this->headers = array();
+    $this->headers_raw = $response;
     // Parse the response headers.
     while ($line = trim(array_shift($response))) {
       list($name, $value) = explode(':', $line, 2);

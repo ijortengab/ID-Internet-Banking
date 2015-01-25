@@ -25,10 +25,13 @@ class cookieStorage extends parseCSV {
   }
 
   function get($parse_url) {
+    
     // Parse csv now.
     $this->parse();
     // Get result.
     $data = $this->data;
+    // echo "get() \r\n";
+    // print_r($data);
 
     // Lakukan filtering data.
     $storage = array();
