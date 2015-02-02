@@ -29,11 +29,6 @@ $ibank->username = 'ijortengab';
 $ibank->password = 'WYSIWYG';
 $ibank->execute();
 
-
-
-
-// $a = new 
-
 // Return float value
 // Result 5001.76
 // echo $ibank->balance->value();

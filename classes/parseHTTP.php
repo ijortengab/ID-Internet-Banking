@@ -31,7 +31,31 @@ class parseHTTP {
     // Parse response headers from the response body.
     // Be tolerant of malformed HTTP responses that separate header and body with
     // \n\n or \r\r instead of \r\n\r\n.
-    list($response, $this->data) = preg_split("/\r\n\r\n|\n\n|\r\r/", $response, 2);
+
+    // Ada Response yang bentuknya seperti ini:
+    /**
+     * HTTP/1.1 100 Continue
+     *
+     * HTTP/1.1 200 OK
+     * Date: Mon, 26 Jan 2015 02:40:50 GMT
+     * Server: Apache/2.4.3 (Win32) OpenSSL/1.0.1c PHP/5.4.7
+     * X-Powered-By: PHP/5.4.7
+     * Content-Length: 5
+     * Content-Type: text/html
+     *
+     * <!DOCTYPE><html><head><title></title></head><body></body></html>
+     */
+    // Sehingga perlu diantisipasi.
+    $parse = preg_split("/\r\n\r\n|\n\n|\r\r/", $response);
+    if (count($parse) > 2) {
+      // Kita asumsikan bahwa message HTTP adalah yang berada paling bawah
+      // dan header yang paling faktual adalah header sebelumnya.
+      $this->data = array_pop($parse);
+      $response = array_pop($parse);
+    }
+    else {
+      list($response, $this->data) = $parse;
+    }
     $response = preg_split("/\r\n|\n|\r/", $response);
     // Parse the response status line.
     list($protocol, $code, $status_message) = explode(' ', trim(array_shift($response)), 3);
@@ -101,5 +125,9 @@ class parseHTTP {
       $code = floor($code / 100) * 100;
     }
     $this->code = $code;
+  }
+
+  public function parse_curl() {
+
   }
 }

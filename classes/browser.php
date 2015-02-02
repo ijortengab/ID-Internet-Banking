@@ -634,7 +634,7 @@ class browser {
           $this->headers('Cookie', NULL);
           // Empty cache filename.
           $this->cache = NULL;
-          // And so, we must replace an new URL.
+          // And last, we must replace an new URL.
           $this->setUrl($location);
           // Browse again.
           return $this->browse();
@@ -659,24 +659,24 @@ class browser {
   }
 
   // Request HTTP modified of function drupal_http_request in Drupal 7.
-  // Some part is in this method, another part is in HTTP object.
+  // Some part is in this method, another part is in Parse HTTP class.
   protected function drupal_http_request() {
     $result = new parseHTTP;
     $url = $this->getUrl();
     $uri = $this->parse_url;
     $options = $this->options();
     $headers = $this->headers();
-    $post = $this->post();    
-    
+    $post = $this->post();
+
     // Merge the default headers.
     $headers += array(
       'User-Agent' => 'Drupal (+http://drupal.org/)',
     );
     // stream_socket_client() requires timeout to be a float.
     $options['timeout'] = (float) $options['timeout'];
-    
+
     // Set post.
-    if (!empty($post)) {      
+    if (!empty($post)) {
       // $headers['Content-Type'] = 'multipart/form-data';
       $headers['Content-Type'] = 'application/x-www-form-urlencoded';
       $options['method'] = 'POST';
@@ -817,14 +817,14 @@ class browser {
       $result->error = 'request timed out';
       return $result;
     }
-    echo "\r\n-----------------\r\n";
-    print_r($response);
-    echo "\r\n-----------------\r\n";
+    // echo "\r\n-----------------\r\n";
+    // print_r($response);
+    // echo "\r\n-----------------\r\n";
     // Drupal code stop here, next we passing to parseHTTP::parse.
     $result->parse($response);
     return $result;
   }
-  
+
   protected function drupal_http_build_query(array $query, $parent = '') {
     $params = array();
 
@@ -857,13 +857,13 @@ class browser {
     $uri = $this->parse_url;
     $options = $this->options();
     $headers = $this->headers();
-    $post = $this->post();    
+    $post = $this->post();
 
     // Start curl.
     $ch = curl_init();
     curl_setopt($ch, CURLOPT_RETURNTRANSFER, TRUE);
     curl_setopt($ch, CURLOPT_HEADER, TRUE);
-    
+
     // Set post.
     if (!empty($post)) {
       // Add a new info of headers.
@@ -872,7 +872,7 @@ class browser {
       curl_setopt($ch, CURLOPT_POST, 1);
       curl_setopt($ch, CURLOPT_POSTFIELDS, $post);
     }
-    
+
     // Support proxy.
     $proxy_server = $this->getState('proxy_server', '');
     $proxy_exceptions = $this->getState('proxy_exceptions', array('localhost', '127.0.0.1'));
@@ -924,14 +924,31 @@ class browser {
     curl_setopt($ch, CURLINFO_HEADER_OUT, TRUE);
     $response = curl_exec($ch);
     $info = curl_getinfo($ch);
-    echo "\r\n-----------------\r\n";
-    print_r($response);
-    print_r($info);
-    $result_header = substr($response, 0, $info['header_size']);
-    $result_body = substr($response, $info['header_size']);
-    var_dump($result_header);
-    var_dump($result_body);
-    echo "\r\n-----------------\r\n";    
+    // echo "\r\n-----------------\r\n";
+    // print_r($response);
+
+    // $parse = preg_split("/\r\n\r\n|\n\n|\r\r/", $response);
+    // if (count($parse) > 2) {
+      // Kita asumsikan bahwa message HTTP adalah yang berada paling bawah
+      // dan header yang paling faktual adalah header sebelumnya.
+      // $this->data = array_pop($parse);
+      // $response = array_pop($parse);
+    // }
+    // else {
+      // list($response, $this->data) = $parse;
+    // }
+    // echo '$response';
+    // print_r($response);
+    // echo '$this->data';
+    // print_r($this->data);
+
+
+    // print_r($info);
+    // $result_header = substr($response, 0, $info['header_size']);
+    // $result_body = substr($response, $info['header_size']);
+    // var_dump($result_header);
+    // var_dump($result_body);
+    // echo "\r\n-----------------\r\n";
     $error = curl_errno($ch);
     curl_close($ch);
     $result = new parseHTTP;
@@ -961,6 +978,15 @@ class browser {
     return $result;
   }
 
+  // Get random user agent.
+  public function getUserAgent($options) {
+    // todo:
+    if ($options['mobile'] && $options['mobile'] == TRUE) {
+      // cari disini.
+    }
+    return 'Mozilla/5.0 (iPhone; U; CPU iPhone OS 3_0 like Mac OS X; en-us) AppleWebKit/528.18 (KHTML, like Gecko) Version/4.0 Mobile/7A341 Safari/528.16';
+  }
+  
   // Reference of field of cookie.
   private function _cookie_field() {
     return array(

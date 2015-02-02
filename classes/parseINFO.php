@@ -77,15 +77,15 @@ class parseINFO {
 		if (is_string($value) && preg_match('/["\'\r\n\t]/',$value)) {
 			$value = json_encode($value);
 		}
-		if (is_string($value) && empty($value)) {
+		elseif (is_string($value) && empty($value)) {
 			// Perlu diberi single quote, jika tidak nanti akan
 			// ada error saat di decode oleh regex drupal.
 			$value = "''";
 		}
-		if (is_bool($value)) {
+		elseif (is_bool($value)) {
 			$value = $value ? 'TRUE' : 'FALSE';
 		}
-		if (is_null($value)) {
+		elseif (is_null($value)) {
 			$value = 'NULL';
 		}
 		return $value;
