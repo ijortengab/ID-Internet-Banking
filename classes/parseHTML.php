@@ -8,12 +8,57 @@
  *
  * @homepage
  *   https://github.com/ijortengab/parseHTML
+ *
+ * Definisi FAQ
+ *
+ *  1. Array Elements Starttag
+ *
+ *     Array yang sederhana satu dimensi, dimana pada key merupakan posisi
+ *     dan value merupakan element starttag.
+ *
+ *     Key adalah posisi dari awal dokumen html (pada $this->raw) menuju
+ *     element yang ditandai dengan karakter kurung siku left "<". Posisi ini
+ *     idem dengan nilai yang didapat dari fungsi strpos.
+ *
+ *     Value merupakan Starttag.
+ *
+ *     Contoh:
+ *
+ *       array(
+ *         '5' => '<body class="a">',
+ *         '25' => '<img class="b">',
+ *         '83' => '<div class="c">',
+ *         '253' => '<div class>',
+ *       );
+ *
+ *     Untuk mengubah starttag ini menjadi full element (termasuk contents dan
+ *     endtag) gunakan method constructElements() atau constructElement().
+ *
+ *
+ *  2. Array Elements Full
+ *
+ *     Idem dengan Array Elements Starttag, namun pada value adalah komponen
+ *     lengkap element yakni terdiri dari starttag, contents, dan endtag -
+ *     kecuali void element. Untuk referensi void element, dapat melihat
+ *     method validate_tag_void_element().
+ *
+ *     Contoh:
+ *
+ *       array(
+ *         '30' => '<meta keyword="abc">',
+ *         '50' => '<body class="a">bla bla bla</body>',
+ *         '250' => '<img class="b">',
+ *         '838' => '<div class="c"><span></span></div>',
+ *         '2530' => '<div class></div>',
+ *       );
+ *
  */
 class parseHTML {
 
   /**
-   * String or NULL.
-   * Data mentah keseluruhan dokumen html. Menjadi rujukan utama untuk
+   * Data mentah keseluruhan dokumen html.
+   *
+   * Dapat bertipe string atau NULL. Properti ini menjadi rujukan utama untuk
    * pencarian dan lain-lain. Jika tercipta object baru hasil eksekusi
    * method find(), maka property $raw dari object baru tersebut akan
    * sama dengan property $raw dari object ini.
@@ -21,12 +66,7 @@ class parseHTML {
   private $raw;
 
   /**
-   * Berisi array satu dimensi, dimana keys merupakan "position", yakni
-   * jarak element dari awal string $raw (idem dengan strpos) dan value
-   * merupakan "element". Element harus lengkap terdiri dari start tag,
-   * content, dan end tag - kecuali element yang tidak memerlukan end tag.
-   * Untuk referensi element tidak perlu end tag, dapat dilihat pada
-   * method validate_tag_void_element().
+   * Merupakan "Array Elements Full", lihat pada Definisi FAQ.
    *
    * Untuk mengambil info properti $element ini, gunakan method getElements().
    * Jika $element merupakan empty array, maka itu berarti $raw digunakan
@@ -34,6 +74,35 @@ class parseHTML {
    */
   private $elements = array();
 
+  /**
+   * Jumlah element yang dimiliki oleh object ini.
+   *
+   * Cara cepat untuk mendapatkan informasi jumlah element. Nilai pada
+   * properti ini didefinisikan saat __construct().
+   */
+  public $length = 0;
+
+  /**
+   * Internal only. Properti ini digunakan oleh developer saat debugging.
+   */
+  public $debug = FALSE;
+
+  /**
+   * Internal only. Property tempat penampungan hasil build regex oleh method
+   * parse_conditions().
+   */
+  public static $mask;
+
+  /**
+   * Construct object.
+   *
+   * Property $length didefinisikan disini.
+   *
+   * @param $raw string
+   *   Data mentah html, lihat pada properti $raw.
+   * @param $elements array
+   *   Merupakan "Array Elements Full", lihat pada Definisi FAQ.
+   */
   function __construct($raw = NULL, $elements = NULL) {
     if (isset($raw)) {
       $this->raw = $raw;
@@ -41,14 +110,24 @@ class parseHTML {
     if (isset($elements)) {
       $this->elements = $elements;
     }
+    // Ubah property $length.
+    if (isset($this->raw) && empty($this->elements)) {
+      $this->length = 1;
+    }
+    elseif (!empty($this->elements)) {
+      $this->length = count($this->elements);
+    }
   }
 
+  /**
+   * Mendapatkan nilai dari properti $raw.
+   */
   public function getRaw() {
     return $this->raw;
   }
 
   /**
-   * Mendapatkan nilai property $elements.
+   * Mendapatkan nilai dari property $elements.
    */
   public function getElements() {
     if (empty($this->elements)) {
@@ -57,116 +136,297 @@ class parseHTML {
     return $this->elements;
   }
 
+  /**
+   * Menemukan element-element dengan selector CSS.
+   *
+   * Membuat object baru dengan element-element
+   * yang dicari berdasarkan selector CSS. Selector yang didukung terbatas,
+   * untuk mengetahui selector yang didukung dapat melihat dokumentasi pada
+   * homepage.
+   *
+   * Get the descendants of each element in the current set of matched elements,
+   * filtered by a selector.
+   * Reference:
+   * http://api.jquery.com/find/
+   *
+   * @param $selector string
+   *   Selector CSS untuk mendapatkan element.
+   *
+   * Return
+   *   Mengembalikan object parseHTML, baik object yang terdapat element
+   *   (bila selector valid dan ditemukan) atau object kosong tanpa element
+   *   (bila selector tidak valid atau hasil tidak ditemukan).
+   */
   public function find($selector) {
-    // Raw = NULL terjadi jika find tidak menemukan element.
+    // Raw dapat bernilai NULL, terjadi jika find tidak menemukan element.
+    // Bila hasil pencarian kosong, atau selector tidak valid, maka
+    // Kita perlu me-return Object kosong, agar mendukung thread method oleh
+    // user, sehingga tidak error.
+    // Contoh: $html->find('invalid selector')->attr('name');
     if (is_null($this->raw)) {
       return new parseHTML;
     }
-    $info_elements = $this->translate_selector($selector);
-    // Bila selector tidak valid, maka return object kosong.
-    if (empty($info_elements)) {
+    // Dapatkan element.
+    $elements = $this->getElements();
+    // Translate selector.
+    $multi_selector = $this->translate_selector($selector);
+    if (!$multi_selector) {
       return new parseHTML;
     }
-
-    $result = $this;
-    while ($info_element = array_shift($info_elements)) {
-      $result = call_user_func_array(array($result, 'find_element'), array($info_element));
+    // Buat penyimpanan hasil.
+    $storage = array();
+    while ($search_elements = array_shift($multi_selector)) {
+      // Search.
+      $result = $this->find_elements($elements, $search_elements, 0);
+      // Nilai dari $result dapat NULL atau empty array, merge
+      // jika ada value.
+      if ($result) {
+        $storage += $result;
+      }
     }
-    return $result;
+    if (!empty($storage)) {
+      return new parseHTML($this->raw, $storage);
+    }
+    return new parseHTML;
   }
 
+  /**
+   * Mendapatkan keseluruhan html element.
+   *
+   * Get the HTML contents of the first element in the set of matched elements.
+   * Reference:
+   * - http://api.jquery.com/html/
+   */
   public function html() {
     // Kita hanya toleransi pada element yang pertama.
     $elements = $this->getElements();
-    if (isset($elements[0])) {
-      // Tag Doctype itu tidak dianggap.
-      $elements[0] = preg_replace('/^\s*\<\!DOCTYPE[^>]*\>/i', '', $elements[0]);
-    }
-    $element = array_shift($elements);
-    return $element;
+    return array_shift($elements);
   }
 
+  /**
+   * Mendapatkan nilai text dari element tanpa tag html.
+   *
+   * Get the combined text contents of each element in the set of matched
+   * elements, including their descendants.
+   * Reference:
+   * - http://api.jquery.com/text/
+   */
   public function text() {
     return strip_tags($this->html());
   }
 
+  /**
+   * Mendapatkan informasi attribute dari element yang pertama.
+   *
+   * Get the value of an attribute for the first element in the set of
+   * matched elements.
+   * Reference:
+   * - http://api.jquery.com/attr/
+   *
+   * param $name string
+   *  Nama attribute yang ingin didapat value-nya.
+   */
   public function attr($name) {
     $element = $this->html();
     $mask = '/^\<\w+\s*[^>]*\>/i';
     if (preg_match($mask, $element, $mathces)) {
-      $start_tag = array_shift($mathces);
-      $attributes = $this->extractAttributes($start_tag, TRUE);
+      $starttag = array_shift($mathces);
+      $attributes = $this->extractAttributes($starttag, TRUE);
       return isset($attributes[$name]) ? $attributes[$name] : NULL;
     }
   }
 
+  /**
+   *
+   */
   public function prev($selector = NULL) {
     // Todo.
   }
-  
+
+  /**
+   *
+   */
   public function next($selector = NULL) {
     // Todo.
   }
-  
+
+  /**
+   *
+   */
   public function parent($selector = NULL) {
     // Todo.
   }
-  
+
+  /**
+   *
+   */
   public function parents($selector = NULL) {
     // Todo.
   }
-  
+
+  /**
+   *
+   */
   public function children($selector = NULL) {
     // Todo.
   }
-  
+
+  /**
+   *
+   */
   public function contents() {
     // Todo.
   }
-  
+
   /**
-   * Mencari element dengan attribute sebagai pencariannya.
-   * Mengembalikan array dengan key merupakan posisi pointer
-   * dan value merupakan start_tag.
+   * Mereduksi element yang di-attach dari jamak menjadi satu.
+   *
+   * @param $index int
+   *   Posisi dari element, dimana posisi pertama dimulai dari index 0.
+   *
+   * Reduce the set of matched elements to the one at the specified index.
+   * Reference:
+   * - http://api.jquery.com/eq/
+   */
+  public function eq($index) {
+    // Todo: support for negative index.
+    $elements = $this->getElements();
+    $keys = array_keys($elements);
+    if (isset($keys[$index]) && isset($elements[$keys[$index]])) {
+      $position = $keys[$index];
+      return new parseHTML($this->raw, array($position => $elements[$position]));
+    }
+    else {
+      return new parseHTML;
+    }
+  }
+
+  /**
+   * Mengambil informasi element form.
+   *
+   * Reference:
+   *  - http://www.w3schools.com/html/html_form_elements.asp
+   *
+   * Todo, support for HTML5 element: <datalist> <keygen> <output>
+   *
+   * @param $selector string
+   *   Custom css selector, if NULL, the selector is
+   *   input, textarea, select, button
+   *
+   * Return
+   *   Simple array which key is value from attribute name
+   *   and value is value from attribute value
+   *   (string or array).
+   */
+  public function extractForm($selector = NULL) {
+    if (is_null($selector)) {
+      $selector = 'input, textarea, select, button';
+    }
+    $storage = array();
+    $form_element = $this->find($selector)->getElements();
+    ksort($form_element);
+    foreach($form_element as $element) {
+      // $debugname = 'element'; echo 'print_r(' . $debugname . '): '; print_r($$debugname); echo "\r\n";
+
+
+      list($starttag, $contents, $endtag) = $this->parseElement($element);
+      $attr = $this->extractAttributes($starttag);
+      if (isset($attr['name'])) {
+        // Handle checkboxes element.
+        $name = $attr['name'];
+        $value = isset($attr['value']) ? $attr['value'] : NULL;
+        // Jika name merupakan checkbox multivalue, contoh: myinput[],
+        // maka kita perlu memberi numeric agar dapat dimasukkan ke array,
+        // sehingga menjadi myinput[0], myinput[1], dsb...
+        if (substr($name, -2, 2) === '[]') {
+          $prefix_name = substr($name, 0, -2);
+          $name = $prefix_name . '[0]';
+          if (array_key_exists($name, $storage)) {
+            $counter = 0;
+            do {
+              $name = $prefix_name . '[' . $counter++ . ']';
+            } while (array_key_exists($name, $storage));
+          }
+        }
+        // Handle multi value.
+        if (isset($storage[$name])) {
+          if (is_string($storage[$name])) {
+            $storage[$name] = (array) $storage[$name];
+          }
+          $storage[$name][] = $value;
+        }
+        else {
+          $storage[$name] = $value;
+        }
+      }
+    }
+    return $storage;
+  }
+
+  /**
+   * Mempersiapkan element-element form yang akan dipost,
+   * dimana input type submit hanya diijinkan satu saja.
+   * Sementara method extractForm() akan menyertakan semua
+   * input type submit.
+   *
+   * Todo, support for HTML5 element: <datalist> <keygen> <output>
+   *
+   * @param $submit string
+   *   Value dari attribute name pada input type submit yang akan dijadikan
+   *   trigger untuk mengirim form.
+   */
+  public function preparePostForm($submit) {
+    $fields = $this->extractForm();
+    $submit = $this->extractForm('input[type=submit]');
+    // Buang semua input submit kecuali 'BalInqRq'.
+    unset($submit[$submit]);
+    return array_diff_assoc($fields, $submit);
+  }
+
+  /**
+   * Mencari element dengan berdasarkan attribute.
+   *
+   * Reference:
+   * - http://www.w3.org/TR/xhtml1/#h-4.5
+   * - http://stackoverflow.com/questions/13159180/set-attribute-without-value
    *
    * @param $attribute
    *   String attribute yang mau dicari, incasesensitive.
    *   Contoh: 'class', 'id',
    * @param $html
    *   String dengan format html.
+   * @param $callback callable
+   *   String atau array yang dapat dipanggil untuk melakukan tambahan filter.
+   * @param $param_arr array
+   *   Array berisi argument yang akan di-passing ke $callback.
    *
    * Return
-   *   Contoh array yang dihasilkan dengan attribute yang dicari
-   *   adalah class:
-   *   array(
-   *     '5' => '<body class="a">',
-   *     '25' => '<img class="b">',
-   *     '83' => '<div class="c">',
-   *   );
+   *   Mengembalikan "Array Elements Starttag"
+   *   lihat pada Definisi FAQ.
    */
-  public function getElementByAttribute($attribute, $html, $callback = NULL, $param_arr = NULL) {
+  public static function getElementByAttribute($attribute, $html, $callback = NULL, $param_arr = NULL) {
     // Set storage.
     $storage = array();
     // Validate.
-    if (!$this->validate_attribute_element($attribute) || strlen($html) === 0) {
+    if (!self::validate_attribute_element($attribute) || strlen($html) === 0) {
       return $storage;
     }
     // Find string.
-    $find = $attribute . '=';
+    $find = $attribute;
     $length = strlen($find);
     $scoupe = $html;
     $offset = 0;
-    while ($distance = stripos($scoupe, $find)) {
+    $distance = stripos($scoupe, $find);
+
+    while ($distance !== FALSE) {
       $position = $distance + $offset;
       // Sebelum disimpan ke storage, maka validasi beberapa hal.
       // Karakter sebelumnya harus whitespace.
       $pch = (isset($html[$position - 1])) ? $html[$position - 1] : false;
       if ($pch && ctype_space($pch)) {
-        // var_dump($position);
         // Cek apakah posisi pointer dari ditemukannya attribute itu
         // berada diantara start tag html.
-        if ($this->validate_inside_start_tag($position, $html)) {
-          // var_dump($position);
+        if (self::validate_inside_start_tag($position, $html)) {
           // Cek apakah karakter pertama setelah
           // karakter < pada element adalah string valid.
           $prefix = substr($html, 0, $position);
@@ -174,7 +434,7 @@ class parseHTML {
           $starttag_lt_position = strrpos($prefix, '<');
           $starttag_rt_position = $position + strpos($suffix, '>') + strlen('>');
           $start_tag = substr($html, $starttag_lt_position, $starttag_rt_position - $starttag_lt_position);
-          if ($this->validate_start_tag($start_tag)) {
+          if (self::validate_start_tag($start_tag)) {
             // Validasi selesai, maka masukkan data ke $storage.
             // Tapi tunggu dulu, karena method ini juga dapat digunakan
             // oleh method lain, maka cek dulu apakah ada custom filter.
@@ -203,13 +463,28 @@ class parseHTML {
       // Ubah offset dan scope.
       $offset += $distance + $length;
       $scoupe = substr($html, $offset);
+      $distance = stripos($scoupe, $find);
     }
     return $storage;
   }
 
   /**
-   * Sama sepert method getElementByAttribute() namun dengan
-   * fitur filter seperti query sql.
+   * Mencari element dengan custom filter berdasarkan attribute dan kondisinya.
+   *
+   * Sama sepert method getElementByAttribute() namun dengan fitur filter
+   * seperti query sql. Method ini terinspirasi dari method pada
+   * class parseCSV dan dilakukan pengembangan agar mirip dengan kebutuhan
+   * selector CSS.
+   *
+   * Mengembalikan array dengan key merupakan posisi pointer
+   * dan value merupakan starttag. Attribute yang dicari
+   * juga bisa tanpa value (Meskipun tidak valid pada XHTML).
+   *
+   * Untuk mengubah starttag menjadi full element (termasuk content dan
+   * endatag) gunakan method constructElements() atau constructElement().
+   *
+   * Reference:
+   *  - https://github.com/parsecsv/parsecsv-for-php
    *
    * @param $conditions string
    *   Syntax seperti sql, berupa kalimat logika untuk pencarian.
@@ -230,68 +505,53 @@ class parseHTML {
    *      Berarti mencari element dengan attribute data-length lebih dari 500
    *      DAN kurang dari 2000.
    *
-   *   Operator yang tersedia:
-   *    - 'AND', 'OR',
-   *    - '=', 'equals', 'is',
-   *    - '!=', 'is not',
-   *    - '<', 'is less than',
-   *    - '>', 'is greater than',
-   *    - '<=', 'is less than or equals',
-   *    - '>=', 'is greater than or equals',
-   *    - 'contains',
-   *    - 'does not contain',
+   *   Operator yang tersedia dapat dilihat pada method
+   *   parse_conditions().
    *
    * @param $html
    *   String dengan format html.
    *
    * Return
-   *   Contoh array yang dihasilkan dengan condiitons yang dicari
-   *   adalah 'class contains a OR class contains x':
+   *   Mengembalikan "Array Elements Starttag"
+   *   lihat pada Definisi FAQ.
+   *   Contoh array yang dihasilkan dengan conditons yang dicari
+   *   adalah 'class contains word a OR class contains word x':
    *
-   *   array(
-   *     '5' => '<body class="a b">',
-   *     '25' => '<img class="x y">',
-   *     '83' => '<div class="a x">',
-   *   );
+   *     array(
+   *       '5' => '<body class="a b">',
+   *       '25' => '<img class="x y">',
+   *       '83' => '<div class="a x">',
+   *     );
+   *
    */
-  public function getElementByAttributes($conditions, $html) {
-    // var_dump('WELCOME IN getElementByAttributes()');
-    // echo 'var_dump($conditions): '; var_dump($conditions);
-    // echo 'var_dump($html): '; var_dump($html);
-
+  public static function getElementByAttributes($conditions, $html) {
     $elements = array();
     // Validate.
     $conditions = trim($conditions);
     if (empty($html) || empty($conditions)) {
       return $elements;
     }
-    $attributes = $this->_get_attributes_parse_conditions($conditions);
-    // echo 'var_dump($attributes): '; var_dump($attributes);
+    $attributes = self::parse_conditions($conditions);
     foreach($attributes as $attribute) {
-      $elements += $this->getElementByAttribute($attribute, $html);
+      $elements += self::getElementByAttribute($attribute, $html);
     }
-    // echo 'var_dump($elements): '; var_dump($elements);
-
     // Filtering.
     foreach($elements as $position => $element) {
-      $attributes = $this->extractAttributes($element);
-      if (!$this->_validate_attribute_conditions($attributes, $conditions)) {
+      $attributes = self::extractAttributes($element);
+      if (!self::_validate_attribute_conditions($attributes, $conditions)) {
         unset($elements[$position]);
       }
     }
-    // echo 'var_dump($elements): '; var_dump($elements);
-    // var_dump('GOODBYE FROM getElementByAttributes()');
-    // echo "\r\n";
-    // echo "\r\n";
-    // echo "\r\n";
     return $elements;
   }
 
   /**
-   * Jika pencarian hanya berdasarkan id, maka lebih baik gunakan
-   * method ini dibandingkan harus mencari menggunakan method
-   * getElementByAttributes() karena method ini telah reduce berbagai
-   * looping.
+   * Mencari element berdasarkan value dari attribute id.
+   *
+   * Method ini dibuat untuk efisiensi pencarian element alih-alih
+   * menggunakan method getElementByAttributes() karena method ini
+   * me-reduce looping.
+   *
    * Ilustrasi: daripada mencari element dengan cara seperti ini:
    *
    *   $this->getElementByAttributes('id = somevalue', $html)
@@ -301,32 +561,44 @@ class parseHTML {
    *   $this->getElementById('somevalue', $html);
    *
    *
+   * Mengembalikan array dengan key merupakan posisi pointer
+   * dan value merupakan starttag. Attribute yang dicari
+   * juga bisa tanpa value (Meskipun tidak valid pada XHTML).
+   *
+   * Untuk mengubah starttag menjadi full element (termasuk content dan
+   * endatag) gunakan method constructElements() atau constructElement().
+   *
    * @param $value string
    *   Value dari attribute id yang akan dicari
    * @param $html
    *   String dengan format html.
    *
    * Return
-   *   Jika terdapat banyak element dengan value dari attribute id yang sama
-   *   nilainya, maka kita hanya akan mengambil element yang pertama.
+   *   Mengembalikan "Array Elements Starttag"
+   *   lihat pada Definisi FAQ.
+   *   Id seharusnya hanya ada satu tiap element pada satu dokumen html.
+   *   Namun jika terdapat banyak element berattribute id dengan value
+   *   yang sama, maka kita hanya akan mengambil element yang pertama.
    *   Contoh:
    *
-   *   array(
-   *     '65' => '<div id="somevalue" class="a">',
-   *   );
+   *     array(
+   *       '65' => '<div id="somevalue" class="a">',
+   *     );
    *
    */
-  public function getElementById($value, $html) {
+  public static function getElementById($value, $html) {
     $callback = 'self::_getElementById';
     $param_arr = array($value);
-    return $this->getElementByAttribute('id', $html, $callback, $param_arr);
+    return self::getElementByAttribute('id', $html, $callback, $param_arr);
   }
 
   /**
-   * Jika pencarian hanya berdasarkan class, maka lebih baik gunakan
-   * method ini dibandingkan harus mencari menggunakan method
-   * getElementByAttributes() karena method ini telah reduce berbagai
-   * looping.
+   * Mencari element berdasarkan value dari attribute class.
+   *
+   * Method ini dibuat untuk efisiensi pencarian element alih-alih
+   * menggunakan method getElementByAttributes() karena method ini
+   * me-reduce looping.
+   *
    * Ilustrasi: daripada mencari element dengan cara seperti ini:
    *
    *   $this->getElementByAttributes('class ~= somevalue', $html)
@@ -336,56 +608,104 @@ class parseHTML {
    *   $this->getElementByClass('somevalue', $html);
    *
    *
+   * Mengembalikan array dengan key merupakan posisi pointer
+   * dan value merupakan starttag. Attribute yang dicari
+   * juga bisa tanpa value (Meskipun tidak valid pada XHTML).
+   *
+   * Untuk mengubah starttag menjadi full element (termasuk content dan
+   * endatag) gunakan method constructElements() atau constructElement().
+   *
    * @param $value string
-   *   Value dari attribute id yang akan dicari
+   *   Value dari attribute class yang akan dicari.
+   *   Dapat menggunakan contitions. Contoh:
+   *    - "cinta"
+   *      Mencari class yang terdapat kata cinta.
+   *    - "cinta AND love"
+   *      Mencari class yang terdapat kata cinta DAN love.
+   *    - "cinta OR love"
+   *      Mencari class yang terdapat kata cinta ATAU love.
+   *
    * @param $html
    *   String dengan format html.
    *
    * Return
-   *   Jika terdapat banyak element dengan value dari attribute id yang sama
-   *   nilainya, maka kita hanya akan mengambil element yang pertama.
+   *   Mengembalikan "Array Elements Starttag"
+   *   lihat pada Definisi FAQ.
    *   Contoh:
    *
-   *   array(
-   *     '65' => '<div class="somevalue anothervalue">',
-   *   );
+   *     array(
+   *       '65' => '<div id="primary" class="somevalue">',
+   *       '230' => '<div id="secondary" class="somevalue">',
+   *     );
    *
    */
-  public function getElementByClass($value, $html) {
+  public static function getElementByClass($value, $html) {
     $callback = 'self::_getElementByClass';
     $param_arr = array($value);
-    return $this->getElementByAttribute('class', $html, $callback, $param_arr);
+    return self::getElementByAttribute('class', $html, $callback, $param_arr);
   }
 
-  public function getElementByTag($tag, $html, $callback = NULL, $param_arr = NULL) {
+  /**
+   * Mencari element berdasarkan tagname.
+   *
+   * Mengembalikan array dengan key merupakan posisi pointer
+   * dan value merupakan starttag. Attribute yang dicari
+   * juga bisa tanpa value (Meskipun tidak valid pada XHTML).
+   *
+   * Untuk mengubah starttag menjadi full element (termasuk content dan
+   * endatag) gunakan method constructElements() atau constructElement().
+   *
+   * @param $tag
+   *   String tag yang mau dicari, incasesensitive.
+   *   Contoh: 'a', 'img',
+   * @param $html
+   *   String dengan format html.
+   * @param $callback callable
+   *   String atau array yang dapat dipanggil untuk melakukan tambahan filter.
+   * @param $param_arr array
+   *   Array berisi argument yang akan di-passing ke $callback.
+   *
+   * Return
+   *   Mengembalikan "Array Elements Starttag"
+   *   lihat pada Definisi FAQ.
+   *   Contoh array yang dihasilkan dengan tag yang dicari
+   *   adalah a:
+   *   array(
+   *     '5' => '<a class="a">',
+   *     '25' => '<a class="b">',
+   *     '83' => '<a class="c">',
+   *     '253' => '<a class>',
+   *   );
+   */
+  public static function getElementByTag($tag, $html, $callback = NULL, $param_arr = NULL) {
     $tag = trim($tag);
     // Set storage.
     $storage = array();
     // Validate.
-    // if ($this->validate_tag_element($tag) === FALSE) {
+    // if (self::validate_tag_element($tag) === FALSE) {
       // return $storage;
     // }
     // Find string.
-    $find = $tag;
+    $find = '<' . $tag;
     $length = strlen($find);
     $scoupe = $html;
     $offset = 0;
     $distance = stripos($scoupe, $find);
-    while ($distance = stripos($scoupe, $find)) {
+    while ($distance !== FALSE) {
       $position = $distance + $offset;
       // Sebelum disimpan ke storage, maka validasi beberapa hal.
       // Karakter sebelumnya harus < dan karakter sesudahnya harus
       // whitespace atau >.
       $nch = (isset($html[$position + $length])) ? $html[$position + $length] : false;
       $pch = (isset($html[$position - 1])) ? $html[$position - 1] : false;
-      if ($nch && (ctype_space($nch) || $nch == '>') && $pch && $pch == '<') {
+      if ($nch && (ctype_space($nch) || $nch == '>')) {
         // Cek apakah posisi pointer dari ditemukannya attribute itu
         // berada diantara start tag html.
-        if ($this->validate_inside_start_tag($position, $html)) {
-          $prefix = substr($html, 0, $position);
-          $suffix = substr($html, $position);
-          $starttag_lt_position = strrpos($prefix, '<');
-          $starttag_rt_position = $position + strpos($suffix, '>') + strlen('>');
+        $_position = $position + 1;
+        if ($_position && self::validate_inside_start_tag($_position, $html)) {
+          $suffix = substr($html, $_position);
+          $starttag_lt_position = $position;
+          $starttag_rt_position = strpos($html, '>', $position) + strlen('>');
           $start_tag = substr($html, $starttag_lt_position, $starttag_rt_position - $starttag_lt_position);
           // Validasi selesai, maka masukkan data ke $storage.
           // Tapi tunggu dulu, karena method ini juga dapat digunakan
@@ -411,25 +731,153 @@ class parseHTML {
           }
         }
       }
+
       // Ubah offset dan scope.
       $offset += $distance + $length;
       $scoupe = substr($html, $offset);
+      $distance = stripos($scoupe, $find);
     }
     return $storage;
   }
 
+  /**
+   * Memecah element menjadi starttag, contents, dan endtag
+   *
+   * @param $element string
+   *   Element html lengkap dengan starttag, contents, dan endtag (kecuali
+   *   void element). Element harus sudah trim dari whitespace atau akan
+   *   gagal.
+   *
+   * Return
+   *   Mengembalikan array dengan key index, dimana:
+   *    - key = 0, merupakan starttag, atau FALSE jika not found or failed,
+   *    - key = 1, merupakan contents, atau FALSE jika not found or failed,
+   *    - key = 2, merupakan endtag, atau FALSE jika not found or failed.
+   *   Info element ini dapat dengan mudah diparsing dengan fungsi list().
+   */
+  public static function parseElement($element) {
+    $starttag = $contents = $endtag = FALSE;
+    // Dapatkan starttag dengan regex.
+    $mask = '/^<(?P<tag>\w+)\s*[^>]*>/';
+    preg_match($mask, $element, $matches);
+    if (preg_match($mask, $element, $matches)) {
+      // Dapatkan contents dan endtag dengan strpos, strlen, dan substr.
+      $starttag = $matches[0];
+      $tag = $matches['tag'];
+      $_endtag = '</' . $tag . '>';
+      if ($distance = strripos($element, $_endtag)) {
+        if ($endtag = substr($element, $distance)) {
+          $contents = substr($element, strlen($starttag), strlen($endtag) * -1);
+        }
+      }
+    }
+    return array($starttag, $contents, $endtag);
+  }
+
+  /**
+   * Mengubah selector css menjadi array untuk proses filtering.
+   *
+   * Array yang dihasilkan akan menjadi susunan seperti ini.
+   *
+   * Multi selector
+   *  - Selector
+   *     - Elements descendent
+   *        - Element
+   *           - Direct
+   *           - Tag
+   *           - Attributes
+   *              - Attribute 1
+   *              - Attribute 2
+   *              - Attribute 3
+   *
+   * Contoh paling ekstrem:
+   *
+   *   $selector = 'div.class1.class2 a, #someid.class3.class4 > img[title][href="\\/a"]';
+   *
+   *   array(
+   *     // First Selector.
+   *     0 => array(
+   *       // Elements descendents.
+   *       0 => array(
+   *         'direct' => FALSE
+   *         'tag' => array(
+   *           0 => 'div'
+   *         ),
+   *         'attributes' => array(
+   *           0 => array(
+   *             'name' => 'class'
+   *             'operator' => '~~='
+   *             'value' => 'class1 class2'
+   *           ),
+   *         ),
+   *       ),
+   *       1 => array(
+   *         'direct' => FALSE
+   *         'tag' => array(
+   *           0 => 'a'
+   *         ),
+   *         'attributes' => array(
+   *         ),
+   *       ),
+   *     ),
+   *
+   *     // Second Selector.
+   *     1 => array(
+   *       // Elements descendents.
+   *       0 => array(
+   *         'direct' => FALSE
+   *         'tag' => array(
+   *         ),
+   *         'attributes' => array(
+   *           0 => array(
+   *             'name' => 'id'
+   *             'operator' => '='
+   *             'value' => 'someid'
+   *           ),
+   *           1 => array(
+   *             'name' => 'class'
+   *             'operator' => '~~='
+   *             'value' => 'class3 class4'
+   *           ),
+   *         ),
+   *       ),
+   *       1 => array(
+   *         'direct' => TRUE
+   *         'tag' => array(
+   *           0 => 'img'
+   *         ),
+   *         'attributes' => array(
+   *           0 => array(
+   *             'name' => 'title'
+   *             'operator' =>
+   *             'value' =>
+   *           ),
+   *           1 => array(
+   *             'name' => 'href'
+   *             'operator' => '='
+   *             'value' => '/a'
+   *           ),
+   *         ),
+   *       ),
+   *     ),
+   *   )
+   */
   public static function translate_selector($selector) {
     $string = trim($selector);
     $string_length = strlen($string);
     $meta_characters = '!"#$%&\'()*+,./:;<=>?@[\\]^`{|}~';
     $last = substr($string, -1, 1);
+    $first = substr($string, 0, 1);
 
     // 1st Validation.
     // Krakter terakhir tidak boleh meta karakter kecuali karakter ].
     if ($last != ']' && strpos($meta_characters, $last) !== FALSE) {
       return FALSE;
     }
-
+    // Karakter pertama jikapun meta character, hanya boleh antara . # [
+    elseif (strpos($meta_characters, $first) !== FALSE && !in_array($first, array('#', '.', '['))) {
+      return FALSE;
+    }
     // Categorize charachter by type to easy us.
     $characters = array();
     for ($x = 0; $x < $string_length; $x++) {
@@ -456,11 +904,12 @@ class parseHTML {
     $attribute_value = '';
     $quote = '';
     $tag = '';
+    $register_selector = FALSE;
     $register_elements = FALSE;
     $register_element = FALSE;
     $is_last = FALSE;
-    $elements = array();
-    $element = $_element = array('tag' => array(), 'attributes' => array());
+    $selector = $elements = $_elements = array();
+    $element = $_element = array('direct' => FALSE, 'tag' => array(), 'attributes' => array());
     $x = 0;
     $string_length = count($characters);
 
@@ -469,16 +918,28 @@ class parseHTML {
       ($x != $string_length - 1) or $is_last = TRUE;
       switch ($step) {
         case 'init':
+          // $debugname = 'character'; echo 'var_dump(' . $debugname . '): '; var_dump($$debugname);
+
           if (isset($character['std'])) {
             $tag .= $character['std'];
             $step = 'build tag';
             if ($is_last) {
               $register_element = TRUE;
               $register_elements = TRUE;
+              $register_selector = TRUE;
             }
           }
           elseif (isset($character['meta'])) {
             switch ($character['meta']) {
+              case ',':
+                $register_elements = TRUE;
+                $register_selector = TRUE;
+                break;
+
+              case '>':
+                $element['direct'] = TRUE;
+                break;
+
               case '#':
                 $attribute_name = 'id';
                 $attribute_operator = '=';
@@ -496,6 +957,9 @@ class parseHTML {
                 break;
             }
           }
+          // elseif (isset($character['space'])) {
+            // $register_elements = TRUE;
+          // }
           break;
 
         case 'brackets build name':
@@ -508,6 +972,7 @@ class parseHTML {
                 $register_element = TRUE;
                 if ($is_last) {
                   $register_elements = TRUE;
+                  $register_selector = TRUE;
                 }
                 break;
 
@@ -535,6 +1000,7 @@ class parseHTML {
                 $register_element = TRUE;
                 if ($is_last) {
                   $register_elements = TRUE;
+                  $register_selector = TRUE;
                 }
                 break;
 
@@ -555,6 +1021,7 @@ class parseHTML {
             $register_element = TRUE;
             if ($is_last) {
               $register_elements = TRUE;
+              $register_selector = TRUE;
             }
           }
           break;
@@ -565,6 +1032,7 @@ class parseHTML {
             if ($is_last) {
               $register_element = TRUE;
               $register_elements = TRUE;
+              $register_selector = TRUE;
             }
           }
           elseif (isset($character['space'])) {
@@ -577,9 +1045,16 @@ class parseHTML {
               $attribute_value .= ' ';
               $attribute_operator = '~~=';
             }
+            // Khusus class, maka ada perlakuan khusus.
+            elseif ($character['meta'] == ',') {
+              $register_element = TRUE;
+              $register_elements = TRUE;
+              $register_selector = TRUE;
+            }
             else {
               $register_element = TRUE;
             }
+
           }
           break;
 
@@ -589,6 +1064,7 @@ class parseHTML {
             if ($is_last) {
               $register_element = TRUE;
               $register_elements = TRUE;
+              $register_selector = TRUE;
             }
           }
           elseif (isset($character['space'])) {
@@ -597,6 +1073,12 @@ class parseHTML {
           }
           elseif (isset($character['meta'])) {
             switch ($character['meta']) {
+              case ',':
+                $register_element = TRUE;
+                $register_elements = TRUE;
+                $register_selector = TRUE;
+                break;
+
               case '#':
                 $attribute_name = 'id';
                 $attribute_operator = '=';
@@ -646,7 +1128,12 @@ class parseHTML {
               break;
 
             case ']':
+              // Jika karakter setelahnya adalah spasi, maka daftarkan ke
+              // elements.
               $step = 'init';
+              if (isset($string[$x + 1]) && ctype_space($string[$x + 1])) {
+                $register_elements = TRUE;
+              }
               break;
 
             case '[':
@@ -670,17 +1157,17 @@ class parseHTML {
         $element = $_element;
         $step = 'init';
       }
+      if ($register_selector) {
+        $selector[] = $elements;
+        $elements = $_elements;
+        $register_selector = FALSE;
+        $step = 'init';
+      }
       $x++;
     }
-    // 3rd Validation. Todo.
-    // From: http://www.w3.org/TR/CSS21/syndata.html#value-def-identifier
-    //  > they cannot start with a digit, two hyphens, or a hyphen
-    //  > followed by a digit.
-    // if (isset($string[$x + 1]) && preg_match('/(?:^\d|\-{2}|-\d)/', $char . $string[$x + 1])) {
-      // $error = 2;
-      // break 2;
-    // }
-    return $elements;
+    return $selector;
+
+
   }
 
   /**
@@ -715,13 +1202,13 @@ class parseHTML {
    * Hasil yang akan didapat adalah sbb:
    *
    *   array(
-   *     '"mengapa"' => '',
-   *     'tempe' => '',
+   *     '"mengapa"' => NULL,
+   *     'tempe' => NULL,
    *     "'agama'" => '',
    *     'id' => 'roji',
    *     '965' => 'cintakita',
    *     'duhai' => 'class="anto"',
-   *     'dengan' => '',
+   *     'dengan' => NULL,
    *     'cinta' => 'kita',
    *     'yoyo' => 'ok',
    *   );
@@ -729,11 +1216,11 @@ class parseHTML {
    * Hasil yang akan didapat jika dilakukan validasi adalah sbb:
    *
    *   array(
-   *     'tempe' => '',
+   *     'tempe' => NULL,
    *     'id' => 'roji',
    *     '965' => 'cintakita',
    *     'duhai' => 'class="anto"',
-   *     'dengan' => '',
+   *     'dengan' => NULL,
    *     'cinta' => 'kita',
    *     'yoyo' => 'ok',
    *   );
@@ -767,7 +1254,7 @@ class parseHTML {
               $step = 'check_quote';
             }
             elseif (ctype_space($char)) {
-              $value = '';
+              $value = NULL;
               $register = TRUE;
             }
             else {
@@ -849,7 +1336,7 @@ class parseHTML {
   }
 
   /**
-   * Validation of tag of element.
+   * Boolean. Validation of tag of element.
    *
    *  > Tags are used to delimit the start and end of elements in markup.
    *  > Elements have a start tag to indicate where they begin.
@@ -863,6 +1350,8 @@ class parseHTML {
    *   - http://www.w3.org/TR/html-markup/syntax.html#tag-name
    *   - http://www.w3.org/TR/html-markup/elements.html
    *
+   * @param $tag string
+   *   Tag Name yang akan divalidasi.
    */
   public static function validate_tag_element($tag) {
     $tags = '
@@ -893,7 +1382,7 @@ class parseHTML {
   }
 
   /**
-   * Validation of start tag of element.
+   * Boolean. Validation of start tag of element.
    *
    * @param $start_tag
    *   Example: <div id="main-content">
@@ -921,9 +1410,10 @@ class parseHTML {
    *   name of attribute.
    *
    * Return
-   *  If argument is string
-   *
-   *
+   *   Jika argument adalah string, maka akan mengembalikan boolean.
+   *   Jika argument adalah array, maka tiap value array akan di-expand
+   *   menjadi array dengan 2 value dimana key 0 adalah nama attribute, dan
+   *   key 1 adalah hasil validasi.
    */
   public static function validate_attribute_element($names) {
     $string = is_string($names);
@@ -946,8 +1436,11 @@ class parseHTML {
   }
 
   /**
-   * Validasi apakah posisi pointer dalam dokumen html berada diantara
-   * start tag.
+   * Boolean. Validasi posisi pointer apakah berada didalam tag html.
+   *
+   * Posisi pointer biasanya didapat dari hasil fungsi strpos()
+   * dalam dokumen html.
+   *
    * Contoh: Misalnya karakter pipe "|" berarti posisi pointer.
    *
    *  1. ... title="bla bla"> My name is | Budi Anduk </a> ...
@@ -1019,28 +1512,98 @@ class parseHTML {
     return strpos($result, '0') === false;
   }
 
-  protected function build_conditions($attributes) {
-    $implode = function ($var) {
-      return implode(' ', $var);
-    };
-    $attributes = array_map($implode, $attributes);
-    return implode(' AND ', $attributes);
+  /**
+   * Menemukan hasil element (satu atau jamak) dengan pencarian tertentu.
+   *
+   * @param $elements array
+   *   Informasi element dimana key merupakan posisi pointer dan value
+   *   merupakan element (lengkap dengan startag, contents, dan endtag
+   *   kecuali void element).
+   *   Contoh:
+   *
+   *     array(
+   *       '241' => '<ul class="topnav"><li>Item A1</li></ul>',
+   *       '618' => '<ul class="topnav"><li>Item B1</li></ul>',
+   *     );
+   *
+   * @param $search_elements array
+   *   Array yang berisi informasi pencarian per satu selector. Variable
+   *   ini didapat dari hasil method "translate_selector()".
+   * @param $looping int
+   *   Internal only, untuk debugging. Method find() dan turunannya
+   *   (yakni: find_elements(), find_element_each(), dan
+   *   find_element_each_direct()) dapat terjadi recursive untuk
+   *   mencapai hasil. Nilai variable ini akan bertambah ketika proses
+   *   mengalami looping.
+   *
+   * Return
+   *   Mengembalikan array seperti parameter $elements yang mana selector
+   *   telah berhasil mendapatkan element yang diinginkan.
+   */
+  protected function find_elements($elements, $search_elements, $looping) {
+    $storage = array();
+    foreach ($elements as $position => $element) {
+      $result = $this->find_element_each($position, $element, $search_elements, $looping);
+      if ($result) {
+        $storage += $result;
+      }
+    }
+    return $storage;
   }
 
-  protected function find_element($info_element) {
-
+  /**
+   * Menemukan hasil element (satu atau jamak) dengan pencarian tertentu.
+   *
+   * @param $position int
+   *   jarak element dari awal string $raw (idem dengan strpos).
+   * @param $element string
+   *   Element html lengkap dengan startag, contents, dan endtag
+   *   kecuali void element.
+   * @param $search_elements array
+   *   Variable pencarian per satu selector, merupakan hasil dari method
+   *   translate_selector().
+   * @param $looping int
+   *   Internal only. Properti ini digunakan oleh developer saat debugging.
+   */
+  protected function find_element_each($position, $element, $search_elements, $looping) {
+    // Lakukan modifikasi khusus pada kasus $element = $this->raw.
+    // Jika terdapat tag ini pada awal html: <!DOCTYPE>
+    // menyebabkan $contens = FALSE.
+    if ($position === 0 && preg_match('/^\s*\<\!DOCTYPE[^>]*\>\s*/i', $this->raw, $matches)) {
+      $position = strlen($matches[0]);
+      $element = substr($this->raw, $position);
+    }
     $storage = array();
-    $elements = $this->getElements();
+    list($starttag, $contents, $endtag) = $this->parseElement($element);
 
-    // Cari tag.
-    $tag = empty($info_element['tag']) ? '' : array_shift($info_element['tag']);
-    // Cari attribute.
-    $attributes = $info_element['attributes'];
+    $starttag_length = strlen($starttag);
+    // Mengambil satu pencarian element, dari kumpulan element yang akan dicari
+    // secara descendet oleh variable $search_elements.
+    if ($search_element = array_shift($search_elements)) {
+      // Khusus selector direct seperti "ul > li", maka kita perlu
+      // melakukan manipulasi element agar pencarian didapat.
+      // Oleh karena itu kita mampir dulu ke method find_element_each_direct()
+      // untuk nantinya akan kembali ke method ini.
+      if ($search_element['direct']) {
+        // Kembalikan lagi variable pencarian element ke
+        // kumpulan pencarian element-element.
+        array_unshift($search_elements, $search_element);
+        // Oper ke method find_element_each_direct() untuk dilakukan
+        // manipulasi.
+        return $this->find_element_each_direct($position, $element, $search_elements, $looping);
+      }
 
-    foreach ($elements as $position => $element) {
+      // Mulai membedah dan mencari informasi pencarian element dengan tag
+      // maupun dengan attribute.
+      $tag = empty($search_element['tag']) ? '' : array_shift($search_element['tag']);
+      $attributes = $search_element['attributes'];
+
+      // Tiap informasi tag dan attribute yang didapat, akan ada method spesifik
+      // yang akan digunakan.
+      // Mulai mencari method yang tepat.
       if (!empty($tag)) {
         $callback = 'self::getElementByTag';
-        $param_arr = array($tag, $element);
+        $param_arr = array($tag, $contents);
         if (!empty($attributes)) {
           $param_arr[] = 'self::getElementByAttributes';
           $param_arr[] = array($this->build_conditions($attributes));
@@ -1053,109 +1616,319 @@ class parseHTML {
           switch ($attribute['name']) {
             case 'id':
               $callback = 'self::getElementById';
-              $param_arr = array($attribute['value'], $element);
+              $param_arr = array($attribute['value'], $contents);
               break;
 
             case 'class':
               $callback = 'self::getElementByClass';
               $attribute['value'] = str_replace(' ', ' AND ', $attribute['value']);
-              $param_arr = array($attribute['value'], $element);
+              $param_arr = array($attribute['value'], $contents);
               break;
 
             default:
-              $conditions = $this->build_conditions(array($attribute));
-              $param_arr = array($conditions, $element);
+              if (empty($attribute['operator']) && empty($attribute['value'])) {
+                $callback = 'self::getElementByAttribute';
+                $param_arr = array($attribute['name'], $contents);
+              }
+              else {
+                $conditions = $this->build_conditions(array($attribute));
+                $param_arr = array($conditions, $contents);
+              }
           }
         }
         else {
           $conditions = $this->build_conditions($attributes);
-          $param_arr = array($conditions, $element);
+          $param_arr = array($conditions, $contents);
         }
       }
-      $results = call_user_func_array($callback, $param_arr);
-      if (!empty($results)) {
-        // Perbaiki position.
-        $this->addPosition($results, $position);
-        // Expand element.
-        $this->expandElement($results, $this->raw);
-        $storage += $results;
-      }
-    }
-    if (!empty($storage)) {
-      return new parseHTML($this->raw, $storage);
-    }
-    return new parseHTML;
-  }
 
-  protected function addPosition(&$start_tag, $add = 0 ) {
-    if ($add === 0) {
-      return;
+      // Method dan argument untuk dieksekusi telah didefinisikan,
+      // dan siap dieksekusi.
+      $results = call_user_func_array($callback, $param_arr);
+
+      // Variable $result berisi informasi element-element berupa array
+      // (atau array kosong jika tidak ditemukan) dimana
+      // key merupakan posisi pointer relative terhadap contents element
+      // dan value merupakan start tag.
+      // Kita perlu menyesuaikan posisi pointer agar relative terhadap
+      // keseluruhan dokumen html.
+      $this->addPosition($results, $position + $starttag_length);
+      // Kita juga perlu mengembangkan informasi element
+      // dari awalnya hanya startag,
+      // menjadi element lengkap yang terdiri dari starttag, contents,
+      // endtag (kecuali void element).
+      $this->constructElements($results, $this->raw);
+      // Masukkan ke storage.
+      $storage += $results;
     }
-    $positions = array_keys($start_tag);
-    foreach ($positions as &$position) {
-      $position += $add;
+
+    // Informasi variable pencarian element-element pada
+    // $search_elements kini telah berkurang satu.
+    // Jika hasil pencarian ternyata element jamak, sementara variable
+    // pencarian ($search_elements) secara descendent masih ada,
+    // maka proses akan recursive dimana proses dimulai lagi
+    // ke method find_elements() sampai variable pencarian habis.
+    if ($search_elements) {
+      return $this->find_elements($storage, $search_elements, ++$looping);
     }
-    $start_tag = array_combine($positions, $start_tag);
+    // Finish simpan ke storage.
+    return $storage;
   }
 
   /**
-   * Mengubah element yang awalnya hanya start tag menjadi
-   * lebih lengkap dengan content dan end tag.
+   * Mengakomodir pencarian dengan selector direct children element.
+   *
+   * Method ini akan memanipulasi variable $element yang mungkin awalnya
+   * terdiri dari banyak nested element menjadi hanya satu saja.
+   *
+   *
    */
-  protected function expandElement(&$elements, $html) {
-    // Validate.
-    $mask = '/^<(?P<tag>\w+)\s*[^>]*>$/';
-    foreach ($elements as $starttag_lt_position => &$element) {
-      if (preg_match($mask, $element, $matches)) {
-        // Kita hanya mencari tag yang tidak termasuk void element.
-        if (!$this->validate_tag_void_element($matches['tag'])) {
-          // Hati-hati dengan nested element.
-          // Kita juga perlu tahu apakah ada nested element
-          // dengan tag yang sama.
-          // Contoh:
-          // <div id="tahu">
-          //   <div id="tempe">
-          //     <div id="tahutempe">
-          //       TEST
-          //     </div>
-          //   </div>
-          // </div>
-          $starttag = '<' . $matches['tag'];
-          $starttag_length = strlen($starttag);
-          $endtag = '</' . $matches['tag'] . '>';
-          $endtag_length = strlen($endtag);
-          $offset_starttag = $offset_endtag = $starttag_lt_position + $starttag_length;
-          $endtag_rt_position = FALSE;
-          do {
-            $distance_starttag = stripos($html, $starttag, $offset_starttag);
-            $distance_endtag = stripos($html, $endtag, $offset_endtag);
-            // Jika endtag tidak ditemukan, maka berarti element ini
-            // dianggap single tag.
-            if ($distance_endtag === FALSE) {
-              break;
-            }
-            // JIka jarak ke starttag lebih kecil, berarti benar ada element
-            // nested dengan tag sama.
-            $nested_exists = $distance_starttag !== FALSE && ($distance_starttag < $distance_endtag);
-            if ($nested_exists) {
-              // Perbaiki jarak offset.
-              $offset_starttag = $distance_starttag + $starttag_length;
-              $offset_endtag = $distance_endtag + $endtag_length;
-            }
-            else {
-              $endtag_rt_position = $distance_endtag + $endtag_length;
-              break;
-            }
-          } while ($nested_exists);
-          if ($endtag_rt_position !== FALSE) {
-            $element = substr($html, $starttag_lt_position, $endtag_rt_position - $starttag_lt_position);
-          }
+  protected function find_element_each_direct($position, $element, $search_elements, $looping) {
+    $storage = array();
+    $childrens = $this->getElementChildren($position, $element);
+    list($starttag, $contents, $endtag) = $this->parseElement($element);
+    if ($childrens) {
+      // Wajib mengganti direct menjadi FALSE,
+      // atau unlimited looping.
+      $search_elements[0]['direct'] = FALSE;
+      // Mulai membuat pseudo element.
+      foreach($childrens as $p => $children) {
+        // Hitung jarak dari endtag parent ke starttag direct children.
+        $space = $p - $position - strlen($starttag);
+        $a = '';
+        // Buat spasi sebagai pengganti jeda antara parent dan direct children.
+        while($space-- > 0){
+          $a .= ' ';
+        }
+        $pseudo_element = $starttag . $a . $children . $endtag;
+        // Oper kembali ke method find_element_each().
+        $result = $this->find_element_each($position, $pseudo_element, $search_elements, ++$looping);
+        if ($result) {
+          $storage += $result;
         }
       }
     }
+    return $storage;
   }
-  
-  protected function _get_attributes_parse_conditions($conditions) {
+
+  /**
+   * Mendapatkan element children nested tepat satu level didalam.
+   *
+   * @param $position int
+   *   Posisi dari parameter $element ke awal string $raw.
+   *
+   * @param $element string
+   *   Element html yang terdiri dari starttag, content, dan endtag,
+   *   kecuali void element yang hanya terdiri dari starttag.
+   *
+   * @param $auto_expand bool
+   *   Jika TRUE, maka starttag yang didapat akan diexpand sehingga menjadi
+   *   full element.
+   *
+   * Return
+   *   Array satu dimensi, dimana keys merupakan "position", yakni
+   *   jarak element dari awal string $raw (idem dengan strpos) dan value
+   *   merupakan starttag atau element lengkap disesuaikan dengan parameter
+   *   $auto_expand.
+   *   Contoh:
+   *
+   *     $element =
+   *       '<ul>
+   *         <li><a>LINK 1</a></li>
+   *         <li><a>LINK 2</a></li>
+   *         <li><a>LINK 3</a></li>
+   *       </ul>';
+   *
+   *   Hasil yang akan didapat adalah sebagai berikut:
+   *
+   *     $array = array(
+   *       'x' => '<li>',
+   *       'x' => '<li>',
+   *       'x' => '<li>',
+   *     );
+   */
+  protected function getElementChildren($position, $element, $auto_expand = FALSE) {
+    // Parsing element.
+    list($starttag, $contents, $endtag) = $this->parseElement($element);
+    // Khusus void element, tidak diperlukan tree.
+    if (!$starttag || !$contents) {
+      return;
+    }
+    $offset = strlen($starttag);
+    $storage = array();
+    $find = '<';
+    $length = strlen($find);
+    $scoupe = $contents;
+    $distance_lt = stripos($scoupe, $find);
+    while ($distance_lt !== FALSE) {
+      $child_starttag_lt_position = $distance_lt + $offset;
+      if ($distance_rt = stripos($scoupe, '>')) {
+        if ($distance_rt > $distance_lt) {
+          $child_starttag_rt_position = $distance_rt + $offset;
+          $child_starttag = substr($element, $child_starttag_lt_position, $child_starttag_rt_position + strlen('>') - $child_starttag_lt_position);
+          $a = substr($child_starttag, 1, 1);
+          if (substr($child_starttag, 1, 1) !== '/') {
+            $this->constructElement($child_starttag_lt_position, $child_starttag, $element);
+            $offset += $distance_lt + strlen($child_starttag);
+            $scoupe = substr($element, $offset);
+            if (!$auto_expand) {
+              $this->destructElement($child_starttag);
+            }
+            $storage[$child_starttag_lt_position] = $child_starttag;
+            $distance_lt = stripos($scoupe, $find);
+            continue;
+          }
+        }
+      }
+      break;
+    }
+    $this->addPosition($storage, $position);
+    return $storage;
+  }
+
+  /**
+   * Mengubah informasi array attribute menjadi conditions.
+   *
+   * Array attribute didapat dari hasil translate selector css, sementara
+   * conditions akan digunakan sebagai argument pada method
+   * getElementByAttribute().
+   */
+  protected function build_conditions($attributes) {
+    $implode = function ($var) {
+      return implode(' ', $var);
+    };
+    $attributes = array_map($implode, $attributes);
+    return implode(' AND ', $attributes);
+  }
+
+  /**
+   * Menambah nilai informasi posisi yang berada pada key array.
+   *
+   * @param $elements array
+   *   Merupakan "Array Elements Full" atau "Array Elements Starttag",
+   *   lihat pada Definisi FAQ.
+   * @param $add int
+   *   Angka yang akan ditambah pada key dari parameter $elements.
+   */
+  protected function addPosition(&$elements, $add = 0 ) {
+    if ($add === 0) {
+      return;
+    }
+    $positions = array_keys($elements);
+    foreach ($positions as &$position) {
+      $position += $add;
+    }
+    $elements = array_combine($positions, $elements);
+  }
+
+  /**
+   * Mengubah starttag menjadi full element.
+   *
+   * Mengubah element yang awalnya hanya start tag menjadi
+   * lebih lengkap dengan content dan end tag. Untuk void element,
+   * maka tidak akan ada perubahan.
+   *
+   * @param $starttags array
+   *   Merupakan "Array Elements Starttag",
+   *   lihat pada Definisi FAQ.
+   * @param $html string
+   *   String dengan format html.
+   */
+  protected function constructElements(&$starttags, $html) {
+    // echo 'var_dump($starttag): '; var_dump($starttag);
+    // return;
+    // $mask = '/^<(?P<tag>\w+)\s*[^>]*>$/';
+    foreach ($starttags as $starttag_lt_position => &$starttag) {
+      // echo 'var_dump($starttag_lt_position): '; var_dump($starttag_lt_position);
+      // echo 'BEFORE var_dump($starttag): '; var_dump($starttag);
+      // echo 'BEFORE var_dump($starttag_lt_position): '; var_dump($starttag_lt_position);
+      $this->constructElement($starttag_lt_position, $starttag, $html);
+      // echo 'AFTER var_dump($starttag): '; var_dump($starttag);
+    }
+  }
+
+  /**
+   * Mengubah starttag menjadi full element.
+   *
+   * @param $starttag_lt_position int
+   *   Jarak pointer ke awal string $html.
+   * @param $starttag string
+   *   Element starttag.
+   * @param $html string
+   *   String dengan format html.
+   */
+  protected function constructElement($starttag_lt_position, &$starttag, $html) {
+    // echo 'var_dump($starttag_lt_position): '; var_dump($starttag_lt_position);
+    // echo 'var_dump($starttag): '; var_dump($starttag);
+    // Validate.
+    $mask = '/^<(?P<tag>\w+)\s*[^>]*>$/';
+    if (preg_match($mask, $starttag, $matches)) {
+      $_starttag = '<' . $matches['tag'];
+      $_starttag_length = strlen($_starttag);
+      $_endtag = '</' . $matches['tag'] . '>';
+      $_endtag_length = strlen($_endtag);
+      $offset_starttag = $offset_endtag = $starttag_lt_position + $_starttag_length;
+      $endtag_rt_position = FALSE;
+      do {
+        $distance_starttag = stripos($html, $_starttag, $offset_starttag);
+        $distance_endtag = stripos($html, $_endtag, $offset_endtag);
+        // Jika endtag tidak ditemukan, maka berarti element ini
+        // dianggap single tag.
+        if ($distance_endtag === FALSE) {
+          break;
+        }
+        // JIka jarak ke starttag lebih kecil, berarti benar ada element
+        // nested dengan tag sama.
+        $nested_exists = $distance_starttag !== FALSE && ($distance_starttag < $distance_endtag);
+        if ($nested_exists) {
+          // Perbaiki jarak offset.
+          $offset_starttag = $distance_starttag + $_starttag_length;
+          $offset_endtag = $distance_endtag + $_endtag_length;
+        }
+        else {
+          $endtag_rt_position = $distance_endtag + $_endtag_length;
+          break;
+        }
+      } while ($nested_exists);
+
+      if ($endtag_rt_position !== FALSE) {
+        $starttag = substr($html, $starttag_lt_position, $endtag_rt_position - $starttag_lt_position);
+      }
+    }
+  }
+
+  /**
+   * Mengubah full element menjadi starttag.
+   *
+   * @param $elements array
+   *   Merupakan "Array Elements Full",
+   *   lihat pada Definisi FAQ.
+   * @param $html string
+   *   String dengan format html.
+   */
+  protected function destructElements(&$elements, $html) {
+    foreach ($elements as $starttag_lt_position => &$element) {
+      $this->destructElement($element);
+    }
+  }
+
+  /**
+   * Mengubah full element menjadi starttag.
+   *
+   * @param $element string
+   *   Element full terdiri dari starttag, contents, dan endtag - kecuali
+   *   void element.
+   */
+  protected function destructElement(&$element) {
+    list($starttag, $contents, $endtag) = $this->parseElement($element);
+    $element = $starttag;
+  }
+
+  /**
+   * Memecah conditions dan dapatkan informasi attribute - attribute
+   * yang ada dalam info conditions tersebut.
+   */
+  protected static function parse_conditions($conditions) {
     $conditions = (strpos($conditions, ' OR ') !== false) ? explode(' OR ', $conditions) : array($conditions);
     $storage = array();
     foreach ($conditions as $key => $value) {
@@ -1190,58 +1963,37 @@ class parseHTML {
     }
     $operators_regex = implode('|', $operators_regex);
     $mask = '/^(.+)\s+('.$operators_regex.')\s+(.+)$/i';
-    isset($this->mask) or $this->mask = $mask;
+    isset(self::$mask) or self::$mask = $mask;
     $fields = array();
     foreach($storage as $condition) {
       if (preg_match($mask, trim($condition), $capture)) {
-        // $this->capture[] = $capture;
         $fields[] = $capture[1];
       }
     }
     return $fields;
   }
 
-  protected function _validate_attribute_conditions($row = array(), $conditions = null) {
-    // print_r($conditions);
-    // var_dump($conditions);
+  /**
+   * Validasi seluruh attributes berdasarkan conditions.
+   */
+  protected static function _validate_attribute_conditions($row = array(), $conditions = null) {
     if (!empty($row)) {
       if (!empty($conditions)) {
-        // var_dump($conditions);
         $conditions = (strpos($conditions, ' OR ') !== false) ? explode(' OR ', $conditions) : array($conditions);
-        // var_dump($conditions);
         $or = '';
         foreach ($conditions as $key => $value) {
           if (strpos($value, ' AND ') !== false) {
-            // var_dump('ADA AND');
             $value = explode(' AND ', $value);
             $and   = '';
-            // echo 'var_dump($row): '; var_dump($row);
             foreach ($value as $k => $v) {
-              // echo 'var_dump($v): '; var_dump($v);
-              $and .= $a = $this->_validate_attribute_condition($row, $v);
-              // echo 'var_dump($a): '; var_dump($a);
-              // echo "\r\n";
-              // echo "\r\n";
-              // echo "\r\n";
-              // echo "\r\n";
-              // echo "\r\n";
+              $and .= $a = self::_validate_attribute_condition($row, $v);
             }
-            // var_dump($and);
             $or .= (strpos($and, '0') !== false) ? '0' : '1';
           }
           else {
-            // var_dump('TIDAK ADA AND');
-            $or .= $a = $this->_validate_attribute_condition($row, $value);
-            // var_dump($or);
-            // echo 'var_dump($a): '; var_dump($a);
-            // echo "\r\n";
-            // echo "\r\n";
-            // echo "\r\n";
-            // echo "\r\n";
-            // echo "\r\n";
+            $or .= $a = self::_validate_attribute_condition($row, $value);
           }
         }
-        // var_dump($or); //todo to do herar
         return (strpos($or, '1') !== false) ? true : false;
       }
       return true;
@@ -1249,8 +2001,11 @@ class parseHTML {
     return false;
   }
 
-  protected function _validate_attribute_condition($row, $condition) {
-    if (preg_match($this->mask, trim($condition), $capture)) {
+  /**
+   * Validasi satu attributes per satu condition.
+   */
+  protected static function _validate_attribute_condition($row, $condition) {
+    if (preg_match(self::$mask, trim($condition), $capture)) {
       $field = $capture[1];
       $op    = $capture[2];
       $value = $capture[3];
@@ -1324,20 +2079,13 @@ class parseHTML {
     return '1';
   }
 
-  protected function buildAttr() {
-    $attributes = array();
-    if (isset($this->start_tag)) {
-      $attributes = $this->extractAttributes($this->start_tag);
-    }
-    $this->attributes = $attributes;
-  }
-
-  // $value is defined by us, and $start_tag is
-  // defined by getElementByAttribute().
-  private function _getElementByClass($value, $start_tag) {
+  /**
+   * Filtering tambahan untuk attribute berdasarkan class.
+   */
+  private static function _getElementByClass($value, $start_tag) {
     $conditions = $value;
     $conditions = (strpos($conditions, ' OR ') !== FALSE) ? explode(' OR ', $conditions) : array($conditions);
-    $attributes = $this->extractAttributes($start_tag);
+    $attributes = self::extractAttributes($start_tag);
     $classes = preg_split('/\s/', $attributes['class']);
     $or = '';
     foreach ($conditions as $key => $value) {
@@ -1356,10 +2104,11 @@ class parseHTML {
     return (strpos($or, '1') !== FALSE) ? TRUE : FALSE;
   }
 
-  // $value is defined by us, and $start_tag is
-  // defined by getElementByAttribute().
-  private function _getElementById($value, $start_tag) {
-    $attributes = $this->extractAttributes($start_tag);
+  /**
+   * Filtering tambahan untuk attribute berdasarkan id.
+   */
+  private static function _getElementById($value, $start_tag) {
+    $attributes = self::extractAttributes($start_tag);
     if ($attributes['id'] === $value) {
       return array(
         'break' => TRUE,
@@ -1367,5 +2116,4 @@ class parseHTML {
     }
     return FALSE;
   }
-
 }

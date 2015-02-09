@@ -25,9 +25,19 @@ require('classes/BNI.php');
 require('classes/Mandiri.php');
 
 $ibank = new internetBankingID('bni');
-$ibank->username = 'ijortengab';
-$ibank->password = 'WYSIWYG';
+// $ibank::$task = 1;
+$ibank::$username = '';
+$ibank::$password = '';
 $ibank->execute();
+
+
+
+// asda
+
+// </img>';
+// $html = '<img src="akjas">asda</img>';
+// $a = tree($html);
+// echo 'print_r($a): '; print_r($a);
 
 // Return float value
 // Result 5001.76

@@ -18,16 +18,17 @@ abstract class internetBanking {
   protected $bank;
 
   // Account information.
-  public $username;
-  public $password;
+  public static $username;
+  
+  public static $password;
 
   // Result information.
-  public $balance;
+  public static $balance;
+  
   public $history;
 
   public $error = array();
-
-  // var $options = array();
+  
 
   function __construct($bank) {
     // We need validation first.
@@ -43,26 +44,6 @@ abstract class internetBanking {
     }
     catch (Exception $e) {
       echo 'Caught exception: ',  $e->getMessage(), "\n";
-    }
-  }
-
-  // Mengeset options.
-  function set() {
-    $args = func_get_args();
-    switch (count($args)) {
-      case '1':
-        $arg = array_shift($args);
-        if (is_array($arg)) {
-          $this->options = array_merge($this->options, $arg);
-        }
-        break;
-
-      case '2':
-        $key = strtolower(array_shift($args));
-        $value = array_shift($args);
-        $this->options[$key] = $value;
-        return $this;
-        break;
     }
   }
 

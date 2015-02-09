@@ -46,17 +46,13 @@ class parseHTTP {
      * <!DOCTYPE><html><head><title></title></head><body></body></html>
      */
     // Sehingga perlu diantisipasi.
-    $parse = preg_split("/\r\n\r\n|\n\n|\r\r/", $response);
-    if (count($parse) > 2) {
-      // Kita asumsikan bahwa message HTTP adalah yang berada paling bawah
-      // dan header yang paling faktual adalah header sebelumnya.
-      $this->data = array_pop($parse);
-      $response = array_pop($parse);
+    list($header, $data) = preg_split("/\r\n\r\n|\n\n|\r\r/", $response, 2);
+    // Antisipasi kasus diatas.
+    if (strpos($data, 'HTTP') === 0) {
+      list($header, $data) = preg_split("/\r\n\r\n|\n\n|\r\r/", $data, 2);  
     }
-    else {
-      list($response, $this->data) = $parse;
-    }
-    $response = preg_split("/\r\n|\n|\r/", $response);
+    $this->data = $data;   
+    $response = preg_split("/\r\n|\n|\r/", $header);
     // Parse the response status line.
     list($protocol, $code, $status_message) = explode(' ', trim(array_shift($response)), 3);
     $this->protocol = $protocol;

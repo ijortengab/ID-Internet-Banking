@@ -393,12 +393,13 @@ class browser {
   protected function history() {
     $filename = $this->getCwd() . DIRECTORY_SEPARATOR . $this->history_filename;
     $request = $this->result->request;
-    $response = $this->result->headers_raw;
+    // Jika koneksi putus, headers_raw tidak terbentuk.
+    $response = isset($this->result->headers_raw) ? $this->result->headers_raw : array();
     $content = '';
     $content .= 'REQUEST:' . "\t";
     $content .= preg_replace("/\r\n|\n|\r/", "\t", $request);
     $content .= PHP_EOL;
-    $content .= 'RESPONSE:' . "\t";
+    $content .= 'RESPONSE:' . "\t" . $this->result->code . "\t";
     $content .= implode("\t", $response);
     $content .= PHP_EOL;
     if ($this->options('cache_save')) {
@@ -436,8 +437,9 @@ class browser {
       $this->error[] = $e->getMessage();
     }
   }
+
   // Source from Drupal 7's function file_create_filename().
-  private function filename_uniquify($basename, $directory) {
+  protected function filename_uniquify($basename, $directory) {
     // Strip control characters (ASCII value < 32). Though these are allowed in
     // some filesystems, not many applications handle them well.
     $basename = preg_replace('/[\x00-\x1F]/u', '_', $basename);
@@ -478,8 +480,8 @@ class browser {
   }
 
   // Modify (add, edit, delete) of simple array in one function.
-  private function propertyArray($property, $args) {
-    if (!property_exists(__CLASS__, $property)) {
+  protected function propertyArray($property, $args) {
+    if (!property_exists($this, $property)) {
       return;
     }
     switch (count($args)) {
@@ -487,21 +489,25 @@ class browser {
         // It means get all info {$property}.
         return $this->{$property};
         break;
+
       case 1:
         $variable = array_shift($args);
         // If NULL, it means reset.
         if (is_null($variable)) {
           $this->{$property} = array();
+          return $this;
         }
         // If Array, it meanse replace all value with that array.
         elseif (is_array($variable)) {
           $this->{$property} = $variable;
+          return $this;
         }
         // Otherwise, it means get one info {$property} by key.
         elseif (isset($this->{$property}[$variable])) {
           return $this->{$property}[$variable];
         }
         break;
+
       case 2:
         // It means set info option.
         $key = array_shift($args);
@@ -510,9 +516,9 @@ class browser {
           if ((is_string($key) || is_numeric($key)) === FALSE) {
             throw new Exception('Key of option must string or numeric.');
           }
-          if ((is_array($value) || is_object($value)) === TRUE) {
-            throw new Exception('Value of option cannot array or object.');
-          }
+          // if ((is_array($value) || is_object($value)) === TRUE) {
+            // throw new Exception('Value of option cannot array or object.');
+          // }
           if (is_null($value)) {
             // It means delete.
             unset($this->{$property}[$key]);
@@ -561,9 +567,13 @@ class browser {
   }
 
   // Main function.
-  public function browse() {
+  public function browse($url = NULL) {
     if (!isset($this->timer)) {
       $this->timer = new timer;
+    }
+    // Set url.
+    if (!empty($url)) {
+      $this->setUrl($url);
     }
     // URL is required.
     $url = $this->getUrl();
@@ -578,6 +588,11 @@ class browser {
     }
     // Use default option.
     $this->options($this->options() + $this->_default_options());
+
+    // Retrieve referer.
+    if ($this->options('referer_retrieve') && $browser_referer = $this->getState('browser_referer')) {
+      $this->headers('Referer', $browser_referer);
+    }
 
     // Retrieve cookie.
     if ($this->options('cookie_retrieve')) {
@@ -640,6 +655,11 @@ class browser {
           return $this->browse();
         }
       }
+    }
+
+    // Save referer.
+    if ($this->options('referer_save') && $url = $this->getUrl()) {
+      $this->setState('browser_referer', $url);
     }
 
     // We must set return so user can playing with parseHTTP object.
@@ -833,7 +853,7 @@ class browser {
 
       // Recurse into children.
       if (is_array($value)) {
-        $params[] = drupal_http_build_query($value, $key);
+        $params[] = $this->drupal_http_build_query($value, $key);
       }
       // If a query parameter value is NULL, only append its key.
       elseif (!isset($value)) {
@@ -986,7 +1006,7 @@ class browser {
     }
     return 'Mozilla/5.0 (iPhone; U; CPU iPhone OS 3_0 like Mac OS X; en-us) AppleWebKit/528.18 (KHTML, like Gecko) Version/4.0 Mobile/7A341 Safari/528.16';
   }
-  
+
   // Reference of field of cookie.
   private function _cookie_field() {
     return array(
