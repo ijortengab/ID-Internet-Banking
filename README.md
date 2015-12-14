@@ -1,3 +1,9 @@
+# Update 2015 12 14
+Project Abandoned  
+Replace with https://github.com/ijortengab/ibank  
+Repository tetap exists untuk kenangan.
+
+
 Deskripsi
 ---------
 
